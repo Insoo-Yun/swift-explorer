@@ -1,0 +1,343 @@
+//! Arayüz dili: Türkçe metinler anahtar, İngilizce karşılıkları aşağıdaki tabloda.
+//! Dil, Windows'un arayüz diline göre seçilir; Görünüm menüsünden değiştirilebilir.
+
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::OnceLock;
+
+static ENGLISH: AtomicBool = AtomicBool::new(false);
+
+pub fn set_english(on: bool) {
+    ENGLISH.store(on, Relaxed);
+}
+
+pub fn english() -> bool {
+    ENGLISH.load(Relaxed)
+}
+
+/// Windows arayüz dili Türkçe değilse İngilizce
+pub fn system_prefers_english() -> bool {
+    const LANG_TURKISH: u16 = 0x1F;
+    let lang = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+    lang & 0x3FF != LANG_TURKISH
+}
+
+fn map() -> &'static HashMap<&'static str, &'static str> {
+    static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
+    MAP.get_or_init(|| TABLE.iter().copied().collect())
+}
+
+/// Metnin geçerli dildeki karşılığı (Türkçe anahtar; çevirisi yoksa kendisi)
+pub fn t(s: &str) -> &str {
+    if !english() {
+        return s;
+    }
+    map().get(s).copied().unwrap_or(s)
+}
+
+/// Yer tutuculu metin: `{}` sırayla, `{0}` `{1}` dizine göre doldurulur.
+pub fn tf(key: &str, args: &[&dyn Display]) -> String {
+    let tpl = t(key);
+    let mut out = String::with_capacity(tpl.len() + 16);
+    let mut next = 0;
+    let mut rest = tpl;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        if let Some(stripped) = after.strip_prefix('{') {
+            out.push('{');
+            rest = stripped;
+            continue;
+        }
+        let Some(j) = after.find('}') else {
+            out.push_str(&rest[i..]);
+            return out;
+        };
+        let inner = &after[..j];
+        let idx = if inner.is_empty() {
+            next += 1;
+            next - 1
+        } else {
+            inner.parse().unwrap_or(usize::MAX)
+        };
+        if let Some(a) = args.get(idx) {
+            out.push_str(&a.to_string());
+        }
+        rest = &after[j + 1..];
+    }
+    out.push_str(&rest.replace("}}", "}"));
+    if english() {
+        out = singular(out);
+    }
+    out
+}
+
+/// "1 items" → "1 item" (öncesinde başka rakam yoksa)
+fn singular(s: String) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s.as_str();
+    while let Some(i) = rest.find("1 items") {
+        let prev = rest[..i].chars().last();
+        out.push_str(&rest[..i]);
+        if prev.is_some_and(|c| c.is_ascii_digit() || c == '.' || c == ',') {
+            out.push_str("1 items");
+        } else {
+            out.push_str("1 item");
+        }
+        rest = &rest[i + "1 items".len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+static TABLE: &[(&str, &str)] = &[
+    ("Ayrıntılar", "Details"),
+    ("Küçük simgeler", "Small icons"),
+    ("Orta simgeler", "Medium icons"),
+    ("Büyük simgeler", "Large icons"),
+    ("Çok büyük simgeler", "Extra large icons"),
+    ("Yeni klasör", "New folder"),
+    ("Yeni Metin Belgesi.txt", "New Text Document.txt"),
+    ("Oluşturulamadı: {}", "Couldn't create: {}"),
+    ("Ad şu karakterleri içeremez: \\ / : * ? \" < > |", "A file name can't contain any of the following characters: \\ / : * ? \" < > |"),
+    ("\"{}\" adında bir öğe zaten var", "There is already an item named \"{}\""),
+    ("Yeniden adlandırılamadı: {}", "Couldn't rename: {}"),
+    ("Geri alınacak bir işlem yok", "Nothing to undo"),
+    ("Yeniden adlandırma geri alındı", "Rename undone"),
+    ("Geri alınamadı: {}", "Couldn't undo: {}"),
+    ("Oluşturma geri alındı", "Create undone"),
+    ("Taşıma geri alındı", "Move undone"),
+    ("Kopyalama geri alındı (kopyalar geri dönüşüm kutusuna)", "Copy undone (copies moved to the Recycle Bin)"),
+    ("Windows \"{}\" öğesini bulamıyor. Adı doğru yazdığınızdan emin olun.", "Windows can't find \"{}\". Check the spelling and try again."),
+    ("Açılamadı: {}", "Couldn't open: {}"),
+    ("{} öğe {} — yapıştırmak için Ctrl+V", "{} item(s) {} — press Ctrl+V to paste"),
+    ("kopyalandı", "copied"),
+    ("kesildi", "cut"),
+    ("Panoda yapıştırılacak dosya yok", "There are no files on the clipboard to paste"),
+    ("Yol panoya kopyalandı", "Path copied to clipboard"),
+    ("Hızlı erişime sabitlendi", "Pinned to Quick access"),
+    ("Masaüstü", "Desktop"),
+    ("İndirilenler", "Downloads"),
+    ("Belgeler", "Documents"),
+    ("Resimler", "Pictures"),
+    ("Müzikler", "Music"),
+    ("Videolar", "Videos"),
+    ("Giriş", "Home"),
+    ("Bu bilgisayar", "This PC"),
+    ("Sekmeyi kapat (Ctrl+W)", "Close tab (Ctrl+W)"),
+    ("Sekmeyi çoğalt", "Duplicate tab"),
+    ("Yeni pencerede aç", "Open in new window"),
+    ("Sekmeyi kapat", "Close tab"),
+    ("Diğer sekmeleri kapat", "Close other tabs"),
+    ("Yeni sekme (Ctrl+T)", "New tab (Ctrl+T)"),
+    ("Geri getir", "Restore Down"),
+    ("Ekranı kapla", "Maximize"),
+    ("Simge durumuna küçült", "Minimize"),
+    ("Geri (Alt+Sol ok)", "Back (Alt+Left Arrow)"),
+    ("İleri (Alt+Sağ ok)", "Forward (Alt+Right Arrow)"),
+    ("Üst klasör (Alt+Yukarı ok)", "Up to parent folder (Alt+Up Arrow)"),
+    ("Yenile (F5)", "Refresh (F5)"),
+    ("Sonuçlarda filtrele", "Filter results"),
+    ("{} klasöründe ara", "Search {}"),
+    ("Temizle (Esc)", "Clear (Esc)"),
+    ("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf).", "Filters this folder as you type.\nEnter: search all subfolders.\n* and ? wildcards are supported (e.g. *.pdf)."),
+    ("Tab: tamamla · Enter: git", "Tab: complete · Enter: go"),
+    ("Yolu yazmak için tıklayın (Ctrl+L)", "Click to type a path (Ctrl+L)"),
+    ("Alt klasör yok", "No subfolders"),
+    ("Yeni", "New"),
+    ("Klasör          Ctrl+Shift+N", "Folder          Ctrl+Shift+N"),
+    ("Metin Belgesi", "Text Document"),
+    ("Kes (Ctrl+X)", "Cut (Ctrl+X)"),
+    ("Kopyala (Ctrl+C)", "Copy (Ctrl+C)"),
+    ("Yapıştır (Ctrl+V)", "Paste (Ctrl+V)"),
+    ("Yeniden adlandır (F2)", "Rename (F2)"),
+    ("Yolu kopyala (Ctrl+Shift+C)", "Copy path (Ctrl+Shift+C)"),
+    ("Sil (Del)  ·  Kalıcı sil: Shift+Del", "Delete (Del)  ·  Permanently delete: Shift+Del"),
+    ("Ad", "Name"),
+    ("Değiştirme tarihi", "Date modified"),
+    ("Tür", "Type"),
+    ("Boyut", "Size"),
+    ("Sırala", "Sort"),
+    ("Artan", "Ascending"),
+    ("Azalan", "Descending"),
+    ("Grupla", "Group by"),
+    ("(Yok)", "(None)"),
+    ("Görünüm", "View"),
+    ("Ayrıntılar bölmesi (Alt+P)", "Details pane (Alt+P)"),
+    ("Gizli öğeler (Ctrl+H)", "Hidden items (Ctrl+H)"),
+    ("Dosya adı uzantıları", "File name extensions"),
+    ("Tema", "Theme"),
+    ("Sistem", "System"),
+    ("Açık", "Light"),
+    ("Koyu", "Dark"),
+    ("Dil", "Language"),
+    ("Tümünü seç            Ctrl+A", "Select all            Ctrl+A"),
+    ("Hiçbirini seçme        Esc", "Select none        Esc"),
+    ("Seçimi tersine çevir", "Invert selection"),
+    ("Geri al                   Ctrl+Z", "Undo                   Ctrl+Z"),
+    ("Terminalde aç", "Open in Terminal"),
+    ("Klasör boyutlarını hesapla", "Calculate folder sizes"),
+    ("Hızlı erişime sabitle   Ctrl+D", "Pin to Quick access   Ctrl+D"),
+    ("Explorer'da aç", "Open in File Explorer"),
+    ("Özellikler              Alt+Enter", "Properties              Alt+Enter"),
+    ("Klavye kısayolları      F1", "Keyboard shortcuts      F1"),
+    ("Aramayı kapat", "Close search"),
+    ("Aç", "Open"),
+    ("Yeni sekmede aç", "Open in new tab"),
+    ("Hızlı erişime sabitle", "Pin to Quick access"),
+    ("Özellikler", "Properties"),
+    ("Hızlı erişimden kaldır", "Unpin from Quick access"),
+    ("Ağ", "Network"),
+    ("Ağ, Windows Dosya Gezgini'nde açılır", "Network opens in Windows File Explorer"),
+    ("Hızlı erişim", "Quick access"),
+    ("Sabitlendi", "Pinned"),
+    ("Son", "Recent"),
+    ("Son listesini temizle", "Clear recent list"),
+    ("Cihazlar ve sürücüler", "Devices and drives"),
+    ("{} boş, {} toplam", "{} free of {}"),
+    ("Dosya klasörü", "File folder"),
+    ("Dosya", "File"),
+    ("Aç                              Enter", "Open                              Enter"),
+    ("Buraya yapıştır", "Paste here"),
+    ("Birlikte aç…", "Open with…"),
+    ("Dosya konumunu aç", "Open file location"),
+    ("Kes                             Ctrl+X", "Cut                             Ctrl+X"),
+    ("Kopyala                       Ctrl+C", "Copy                       Ctrl+C"),
+    ("Yol olarak kopyala   Ctrl+Shift+C", "Copy as path   Ctrl+Shift+C"),
+    ("Yeniden adlandır          F2", "Rename          F2"),
+    ("Sil                               Del", "Delete                               Del"),
+    ("Boyutu hesapla", "Calculate size"),
+    ("Explorer'da göster", "Show in File Explorer"),
+    ("Özellikler                   Alt+Enter", "Properties                   Alt+Enter"),
+    ("Daha fazla seçenek göster  Shift+F10", "Show more options  Shift+F10"),
+    ("☰  Görünüm", "☰  View"),
+    ("↕  Sırala", "↕  Sort"),
+    ("Yenile                          F5", "Refresh                          F5"),
+    ("Yapıştır                       Ctrl+V", "Paste                       Ctrl+V"),
+    ("Geri al                         Ctrl+Z", "Undo                         Ctrl+Z"),
+    ("➕  Yeni", "➕  New"),
+    ("📁  Klasör    Ctrl+Shift+N", "📁  Folder    Ctrl+Shift+N"),
+    ("📝  Metin Belgesi", "📝  Text Document"),
+    ("Tümünü seç                Ctrl+A", "Select all                Ctrl+A"),
+    ("Hızlı erişime sabitle    Ctrl+D", "Pin to Quick access    Ctrl+D"),
+    ("⚠  Bu klasöre erişilemiyor: {}", "⚠  This folder can't be accessed: {}"),
+    ("Aranıyor…", "Searching…"),
+    ("Aramanızla eşleşen öğe yok.", "No items match your search."),
+    ("Filtreyle eşleşen öğe yok — tüm alt klasörlerde aramak için Enter'a basın.", "No items match the filter — press Enter to search all subfolders."),
+    ("Bu klasör boş.", "This folder is empty."),
+    ("Klasör", "Folder"),
+    ("Tür: {}", "Type: {}"),
+    ("Boyut: {}", "Size: {}"),
+    ("Değiştirme: {}", "Date modified: {}"),
+    ("Ayrıntılarını görmek için bir öğe seçin.", "Select a single file to get more information."),
+    ("{} öğe seçildi", "{} items selected"),
+    ("Dosyaların toplam boyutu: {}", "Total size of files: {}"),
+    ("{} öğe", "{} items"),
+    ("{}  ({} bayt)", "{}  ({} bytes)"),
+    ("Değiştirme", "Modified"),
+    ("Oluşturma", "Created"),
+    ("Konum", "Location"),
+    ("Önizleme yapılamadı: {}", "Couldn't preview: {}"),
+    ("Önizleme", "Preview"),
+    ("{} öğe", "{} items"),
+    ("(filtre: {} / {})", "(filter: {} / {})"),
+    ("{} öğe seçildi  {}", "{} items selected  {}"),
+    ("{} öğe seçildi", "{} items selected"),
+    ("Arama tamamlandı · {} klasör · {} sn", "Search complete · {} folders · {} s"),
+    ("Aranıyor… {} klasör tarandı", "Searching… {} folders scanned"),
+    ("Büyük simgeler (Ctrl+Shift+2)", "Large icons (Ctrl+Shift+2)"),
+    ("Ayrıntılar (Ctrl+Shift+6)", "Details (Ctrl+Shift+6)"),
+    ("İptal", "Cancel"),
+    ("Taşı", "Move"),
+    ("Taşı / kopyala (Ctrl: kopyala, Shift: taşı)", "Move / copy (Ctrl: copy, Shift: move)"),
+    ("\"{}\" klasörüne kopyalamak için bırakın", "Drop to copy to \"{}\""),
+    ("Kalıcı olarak silinsin mi?", "Delete permanently?"),
+    ("Bu {} öğe", "These {} items"),
+    ("{} geri dönüşüm kutusuna gitmeden silinecek. Bu işlem geri alınamaz.", "{} will be deleted without going to the Recycle Bin. This can't be undone."),
+    ("… ve {} öğe daha", "… and {} more"),
+    ("Vazgeç", "Cancel"),
+    ("Kalıcı olarak sil", "Delete permanently"),
+    ("Dosyaları değiştir veya atla", "Replace or Skip Files"),
+    ("Hedef \"{}\" klasöründe aynı adlı {} öğe var:", "The destination \"{}\" has {} item(s) with the same names:"),
+    ("Hedefteki dosyaları değiştir", "Replace the files in the destination"),
+    ("Klasörler birleştirilir, aynı adlı dosyaların üzerine yazılır", "Folders are merged, files with the same name are overwritten"),
+    ("Bu dosyaları atla", "Skip these files"),
+    ("Aynı adlı öğeler kopyalanmaz", "Items with the same name aren't copied"),
+    ("İkisini de sakla", "Keep both"),
+    ("Yeni öğeler \"- Kopya\" ekiyle adlandırılır", "New items get a \"- Copy\" suffix"),
+    ("Klavye kısayolları", "Keyboard shortcuts"),
+    ("Dosya Gezgini'ndeki kısayolların hepsi aynı; ekstralar ★ ile işaretli.", "All File Explorer shortcuts work the same; extras are marked with ★."),
+    ("Kapat", "Close"),
+    ("{} sn", "{} s"),
+    ("{} dk {} sn", "{} min {} s"),
+    ("{} sa {} dk", "{} h {} min"),
+    ("Enter / çift tık", "Enter / double-click"),
+    ("Alt+Sol / Alt+Sağ", "Alt+Left / Alt+Right"),
+    ("Geri / İleri (farenin yan tuşları da)", "Back / Forward (mouse side buttons too)"),
+    ("Alt+Yukarı / Backspace", "Alt+Up / Backspace"),
+    ("Üst klasör", "Parent folder"),
+    ("Adres çubuğu (Tab ile otomatik tamamla)", "Address bar (Tab to autocomplete)"),
+    ("Arama kutusu — yazdıkça filtreler, Enter alt klasörlerde arar ★", "Search box — filters as you type, Enter searches subfolders ★"),
+    ("Kopyala / Kes / Yapıştır (Explorer ile karşılıklı)", "Copy / Cut / Paste (works with File Explorer)"),
+    ("Geri al: yeniden adlandırma, taşıma, kopyalama, silme", "Undo: rename, move, copy, delete"),
+    ("Yeniden adlandır (yerinde)", "Rename (in place)"),
+    ("Geri dönüşüm kutusuna / kalıcı sil", "To Recycle Bin / delete permanently"),
+    ("Tümünü seç", "Select all"),
+    ("Shift+ok / Ctrl+Boşluk", "Shift+Arrow / Ctrl+Space"),
+    ("Aralık seç / tek tek seç", "Select range / select individually"),
+    ("Harf yazmak", "Type a letter"),
+    ("O harfle başlayan öğeye atla", "Jump to the item starting with that letter"),
+    ("Ayrıntılar / önizleme bölmesi", "Details / preview pane"),
+    ("Çok büyük … ayrıntılar görünümü", "Extra large … details view"),
+    ("Ctrl+fare tekerleği", "Ctrl+mouse wheel"),
+    ("Simge boyutunu değiştir", "Change icon size"),
+    ("Yeni sekme / sekmeyi kapat", "New tab / close tab"),
+    ("Sekmeler arası geçiş", "Switch between tabs"),
+    ("Yeni pencere", "New window"),
+    ("Shift+sağ tık / Shift+F10", "Shift+right-click / Shift+F10"),
+    ("Windows'un tam sağ tık menüsü", "Full Windows context menu"),
+    ("Orta tık", "Middle-click"),
+    ("Klasörü yeni sekmede aç / sekmeyi kapat ★", "Open folder in new tab / close tab ★"),
+    ("Sürükle-bırak", "Drag and drop"),
+    ("Aynı sürücü: taşı, farklı sürücü: kopyala (Ctrl: kopyala, Shift: taşı)", "Same drive: move, other drive: copy (Ctrl: copy, Shift: move)"),
+    ("Yolu kopyala", "Copy path"),
+    ("Hızlı erişime sabitle ★", "Pin to Quick access ★"),
+    ("Gizli öğeleri göster/gizle ★", "Show/hide hidden items ★"),
+    ("Yenile", "Refresh"),
+    ("Tam ekran", "Full screen"),
+    ("Aramayı kapat / filtreyi temizle / seçimi kaldır", "Close search / clear filter / clear selection"),
+    (" (+{} hata)", " (+{} errors)"),
+    ("İptal edildi: {}", "Canceled: {}"),
+    ("{} öğe geri dönüşüm kutusuna taşındı — geri almak için Ctrl+Z", "{} items moved to the Recycle Bin — press Ctrl+Z to undo"),
+    ("Geri dönüşüm kutusundan geri yüklendi", "Restored from the Recycle Bin"),
+    ("Tamamlandı: {}", "Done: {}"),
+    ("{} bayt", "{} bytes"),
+    ("Bugün", "Today"),
+    ("Dün", "Yesterday"),
+    ("Bu haftanın başlarında", "Earlier this week"),
+    ("Geçen hafta", "Last week"),
+    ("Bu ayın başlarında", "Earlier this month"),
+    ("Geçen ay", "Last month"),
+    ("Bu yılın başlarında", "Earlier this year"),
+    ("Uzun zaman önce", "A long time ago"),
+    ("{} dosyası", "{} File"),
+    ("iptal edildi", "canceled"),
+    (" - Kopya", " - Copy"),
+    (" - Kopya ({})", " - Copy ({})"),
+    ("Taşınıyor", "Moving"),
+    ("Kopyalanıyor", "Copying"),
+    ("{}: {} öğe → {}", "{}: {} items → {}"),
+    ("{}: klasör kendi içine kopyalanamaz", "{}: a folder can't be copied into itself"),
+    ("Geri dönüşüm kutusunda bulunamadı", "Not found in the Recycle Bin"),
+    ("Kalıcı siliniyor", "Deleting permanently"),
+    ("Geri dönüşüm kutusuna", "To Recycle Bin"),
+    ("{}: {} öğe", "{}: {} items"),
+    ("Boyut hesaplanıyor: {} klasör", "Calculating size: {} folders"),
+    ("Geri yükleniyor: {} öğe", "Restoring: {} items"),
+    ("Çıkarılabilir disk", "Removable Disk"),
+    ("Yerel Disk", "Local Disk"),
+    ("Ağ sürücüsü", "Network Drive"),
+    ("Sürücü", "Drive"),
+    ("%{}  ·  {}/sn  ·  yaklaşık {} kaldı", "{0}%  ·  {1}/s  ·  about {2} left"),
+];

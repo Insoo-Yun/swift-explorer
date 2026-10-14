@@ -1,0 +1,431 @@
+//! Windows Shell entegrasyonu: sistem ikonları/küçük resimler, tür adları,
+//! yerel sağ tık menüsü, uygulamadan dışarı sürükle-bırak ve vurgu rengi.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex};
+
+use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR};
+use windows::Win32::Foundation::{
+    BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, LPARAM, LRESULT, POINT, RECT,
+    SIZE, S_OK, WPARAM,
+};
+use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
+use windows::Win32::Graphics::Gdi::{
+    DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HBITMAP,
+};
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, IDataObject, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Ole::{DoDragDrop, IDropSource, IDropSource_Impl, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE};
+use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
+use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+use windows::Win32::UI::Shell::{
+    BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3, IShellItemArray,
+    IShellItemImageFactory, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetFileInfoW,
+    SHParseDisplayName, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL,
+    CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME,
+    SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreatePopupMenu, DestroyMenu, GetCursorPos, GetWindowRect, IsZoomed, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
+    HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_SHOWNORMAL, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT,
+};
+
+fn hs(p: &Path) -> HSTRING {
+    HSTRING::from(p.as_os_str())
+}
+
+// ---------------------------------------------------------------- görüntüler
+
+/// Shell'den ikon ya da küçük resim alır (Explorer'ın kendi önbelleğini kullanır).
+pub fn shell_image(path: &Path, size: i32, icon_only: bool) -> Option<egui::ColorImage> {
+    unsafe {
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&hs(path), None).ok()?;
+        let mut flags: SIIGBF = SIIGBF_BIGGERSIZEOK;
+        if icon_only {
+            flags |= SIIGBF_ICONONLY;
+        }
+        let hbm = factory.GetImage(SIZE { cx: size, cy: size }, flags).ok()?;
+        let img = hbitmap_to_image(hbm);
+        let _ = DeleteObject(hbm);
+        img
+    }
+}
+
+unsafe fn hbitmap_to_image(hbm: HBITMAP) -> Option<egui::ColorImage> {
+    let mut bm = BITMAP::default();
+    if GetObjectW(hbm, std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut c_void)) == 0 {
+        return None;
+    }
+    let (w, h) = (bm.bmWidth, bm.bmHeight.abs());
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let mut bi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h, // yukarıdan aşağı
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    let dc = GetDC(HWND::default());
+    let lines = GetDIBits(dc, hbm, 0, h as u32, Some(buf.as_mut_ptr() as *mut c_void), &mut bi, DIB_RGB_COLORS);
+    ReleaseDC(HWND::default(), dc);
+    if lines == 0 {
+        return None;
+    }
+    // JPEG küçük resimlerinde alfa kanalı boş gelir
+    let no_alpha = buf.chunks_exact(4).all(|p| p[3] == 0);
+    for p in buf.chunks_exact_mut(4) {
+        p.swap(0, 2); // BGRA → RGBA
+        if no_alpha {
+            p[3] = 255;
+        }
+    }
+    Some(egui::ColorImage::from_rgba_premultiplied([w as usize, h as usize], &buf))
+}
+
+pub fn type_name(ext: &str) -> String {
+    unsafe {
+        let mut info = SHFILEINFOW::default();
+        let name = HSTRING::from(format!("x.{ext}"));
+        SHGetFileInfoW(
+            &name,
+            FILE_ATTRIBUTE_NORMAL,
+            Some(&mut info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES,
+        );
+        let len = info.szTypeName.iter().position(|&c| c == 0).unwrap_or(0);
+        String::from_utf16_lossy(&info.szTypeName[..len])
+    }
+}
+
+#[derive(Clone)]
+pub enum Img {
+    Pending,
+    Ready(egui::TextureHandle),
+    Failed,
+}
+
+struct Req {
+    key: String,
+    path: PathBuf,
+    size: i32,
+    icon_only: bool,
+}
+
+/// Arka plan iş parçacıklarında ikon/küçük resim üretip doku olarak önbelleğe alır.
+/// İstekler LIFO işlenir: hızlı kaydırmada ekrandaki öğeler önce gelir.
+pub struct ImageCache {
+    textures: HashMap<String, Img>,
+    queue: Arc<(Mutex<Vec<Req>>, Condvar)>,
+    rx: Receiver<(String, Option<egui::ColorImage>)>,
+    thumbs: usize,
+}
+
+impl ImageCache {
+    pub fn new(ctx: &egui::Context) -> ImageCache {
+        let queue: Arc<(Mutex<Vec<Req>>, Condvar)> = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let (tx, rx): (Sender<(String, Option<egui::ColorImage>)>, _) = channel();
+        for _ in 0..4 {
+            let q = queue.clone();
+            let tx = tx.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+                }
+                loop {
+                    let req = {
+                        let (m, cv) = &*q;
+                        let mut g = m.lock().unwrap();
+                        loop {
+                            if let Some(r) = g.pop() {
+                                break r;
+                            }
+                            g = cv.wait(g).unwrap();
+                        }
+                    };
+                    // Shell ara sıra (özellikle aynı anda çok istekte) başarısız olur; birkaç kez dene
+                    let mut img = None;
+                    for attempt in 0..3 {
+                        img = shell_image(&req.path, req.size, req.icon_only);
+                        if img.is_some() {
+                            break;
+                        }
+                        if !req.icon_only && attempt == 1 {
+                            // Küçük resim yoksa ikona düş
+                            img = shell_image(&req.path, req.size, true);
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                    }
+                    if tx.send((req.key, img)).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
+                }
+            });
+        }
+        ImageCache { textures: HashMap::new(), queue, rx, thumbs: 0 }
+    }
+
+    pub fn get(&mut self, key: &str, path: &Path, size: i32, icon_only: bool) -> Img {
+        if let Some(t) = self.textures.get(key) {
+            return t.clone();
+        }
+        self.textures.insert(key.to_string(), Img::Pending);
+        let (m, cv) = &*self.queue;
+        m.lock().unwrap().push(Req { key: key.to_string(), path: path.to_path_buf(), size, icon_only });
+        cv.notify_one();
+        Img::Pending
+    }
+
+    /// Bekleyen (henüz işlenmemiş) istekleri atar; klasör değişince eski istekler beklemesin.
+    pub fn drop_pending(&mut self) {
+        let mut q = self.queue.0.lock().unwrap();
+        for r in q.drain(..) {
+            self.textures.remove(&r.key);
+        }
+    }
+
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        while let Ok((key, img)) = self.rx.try_recv() {
+            if !key.starts_with('i') {
+                self.thumbs += 1;
+            }
+            let tex = match img {
+                Some(i) => Img::Ready(ctx.load_texture(&key, i, egui::TextureOptions::LINEAR)),
+                None => Img::Failed,
+            };
+            self.textures.insert(key, tex);
+        }
+        // Bellek sınırı: çok fazla küçük resim birikirse onları bırak (ikonlar kalır)
+        if self.thumbs > 2500 {
+            self.textures.retain(|k, _| k.starts_with('i'));
+            self.thumbs = 0;
+        }
+    }
+}
+
+// ---------------------------------------------------------------- PIDL yardımcıları
+
+struct Pidls(Vec<*mut ITEMIDLIST>);
+
+impl Drop for Pidls {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            unsafe { CoTaskMemFree(Some(*p as *const c_void)) };
+        }
+    }
+}
+
+fn item_array(paths: &[PathBuf]) -> Option<(IShellItemArray, Pidls)> {
+    unsafe {
+        let mut pidls = Pidls(Vec::new());
+        for p in paths {
+            let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
+            if SHParseDisplayName(&hs(p), None, &mut pidl, 0, None).is_ok() && !pidl.is_null() {
+                pidls.0.push(pidl);
+            }
+        }
+        if pidls.0.is_empty() {
+            return None;
+        }
+        let consts: Vec<*const ITEMIDLIST> = pidls.0.iter().map(|p| *p as *const _).collect();
+        let arr = SHCreateShellItemArrayFromIDLists(&consts).ok()?;
+        Some((arr, pidls))
+    }
+}
+
+// ---------------------------------------------------------------- yerel sağ tık menüsü
+
+thread_local! {
+    static ACTIVE_MENU: RefCell<Option<IContextMenu>> = const { RefCell::new(None) };
+}
+
+/// Ana pencereyi alt sınıflar: "Gönder", "Birlikte aç" gibi alt menüler
+/// IContextMenu2/3'e iletilen mesajlarla doldurulur.
+pub fn install_subclass(hwnd: isize) {
+    unsafe {
+        let _ = SetWindowSubclass(HWND(hwnd as *mut c_void), Some(subclass_proc), 0x4847, 0);
+    }
+}
+
+unsafe extern "system" fn subclass_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    if msg == WM_NCHITTEST {
+        let hit = DefSubclassProc(hwnd, msg, wp, lp);
+        if hit.0 == HTCLIENT as isize {
+            if let Some(edge) = resize_edge(hwnd, lp) {
+                return LRESULT(edge as isize);
+            }
+        }
+        return hit;
+    }
+    if matches!(msg, WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR | WM_MENUSELECT) {
+        let handled = ACTIVE_MENU.with(|m| {
+            let m = m.borrow();
+            let cm = m.as_ref()?;
+            if let Ok(cm3) = cm.cast::<IContextMenu3>() {
+                let mut res = LRESULT(0);
+                if cm3.HandleMenuMsg2(msg, wp, lp, Some(&mut res)).is_ok() {
+                    return Some(res);
+                }
+            } else if let Ok(cm2) = cm.cast::<IContextMenu2>() {
+                if cm2.HandleMenuMsg(msg, wp, lp).is_ok() {
+                    return Some(LRESULT(0));
+                }
+            }
+            None
+        });
+        if let Some(r) = handled {
+            return r;
+        }
+    }
+    DefSubclassProc(hwnd, msg, wp, lp)
+}
+
+/// Kenarlıksız pencerede kenarlardan boyutlandırma: imleç kenara yakınsa ilgili HT kodu.
+unsafe fn resize_edge(hwnd: HWND, lp: LPARAM) -> Option<u32> {
+    if IsZoomed(hwnd).as_bool() {
+        return None;
+    }
+    let mut r = RECT::default();
+    GetWindowRect(hwnd, &mut r).ok()?;
+    let (x, y) = ((lp.0 & 0xFFFF) as i16 as i32, ((lp.0 >> 16) & 0xFFFF) as i16 as i32);
+    let dpi = windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd).max(96) as i32;
+    let b = 6 * dpi / 96;
+    let (l, rt, t, bt) = (x < r.left + b, x >= r.right - b, y < r.top + b, y >= r.bottom - b);
+    Some(match (l, rt, t, bt) {
+        (true, _, true, _) => HTTOPLEFT,
+        (_, true, true, _) => HTTOPRIGHT,
+        (true, _, _, true) => HTBOTTOMLEFT,
+        (_, true, _, true) => HTBOTTOMRIGHT,
+        (true, ..) => HTLEFT,
+        (_, true, ..) => HTRIGHT,
+        (_, _, true, _) => HTTOP,
+        (.., true) => HTBOTTOM,
+        _ => return None,
+    })
+}
+
+pub enum MenuResult {
+    None,
+    Rename,
+    Invoked,
+}
+
+/// Explorer'ın gerçek sağ tık menüsünü imleç konumunda gösterir.
+pub fn context_menu(hwnd: isize, paths: &[PathBuf], extended: bool) -> MenuResult {
+    unsafe {
+        let Some((arr, _pidls)) = item_array(paths) else { return MenuResult::None };
+        let Ok(cm) = arr.BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject) else { return MenuResult::None };
+        let Ok(menu) = CreatePopupMenu() else { return MenuResult::None };
+        let mut flags = CMF_NORMAL | CMF_CANRENAME;
+        if extended {
+            flags |= CMF_EXTENDEDVERBS;
+        }
+        if cm.QueryContextMenu(menu, 0, 1, 0x7FFF, flags).is_err() {
+            let _ = DestroyMenu(menu);
+            return MenuResult::None;
+        }
+        let mut pt = POINT::default();
+        let _ = GetCursorPos(&mut pt);
+        let hwnd = HWND(hwnd as *mut c_void);
+        ACTIVE_MENU.with(|m| *m.borrow_mut() = Some(cm.clone()));
+        let cmd = TrackPopupMenuEx(menu, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, hwnd, None);
+        ACTIVE_MENU.with(|m| *m.borrow_mut() = None);
+        let _ = DestroyMenu(menu);
+        if cmd.0 <= 0 {
+            return MenuResult::None;
+        }
+        let id = (cmd.0 - 1) as usize;
+        let mut verb = [0u16; 64];
+        if cm.GetCommandString(id, GCS_VERBW, None, PSTR(verb.as_mut_ptr() as *mut u8), verb.len() as u32).is_ok() {
+            let len = verb.iter().position(|&c| c == 0).unwrap_or(0);
+            if String::from_utf16_lossy(&verb[..len]).eq_ignore_ascii_case("rename") {
+                return MenuResult::Rename;
+            }
+        }
+        let info = CMINVOKECOMMANDINFOEX {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+            fMask: 0x4000 | 0x2000_0000, // CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE
+            hwnd,
+            lpVerb: PCSTR(id as *const u8),
+            lpVerbW: PCWSTR(id as *const u16),
+            nShow: SW_SHOWNORMAL.0,
+            ptInvoke: pt,
+            ..Default::default()
+        };
+        let _ = cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
+        MenuResult::Invoked
+    }
+}
+
+// ---------------------------------------------------------------- dışarı sürükle-bırak
+
+#[implement(IDropSource)]
+struct DropSource;
+
+impl IDropSource_Impl for DropSource_Impl {
+    fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
+        if escape.as_bool() {
+            DRAGDROP_S_CANCEL
+        } else if keys.0 & MK_LBUTTON.0 == 0 {
+            DRAGDROP_S_DROP
+        } else {
+            S_OK
+        }
+    }
+
+    fn GiveFeedback(&self, _effect: DROPEFFECT) -> HRESULT {
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+/// Seçili öğeleri OLE sürükle-bırak ile masaüstüne/Explorer'a/başka uygulamalara taşır.
+/// Bırakılana kadar engeller (Windows'un kendi sürükleme döngüsü).
+pub fn drag_out(paths: &[PathBuf]) -> bool {
+    unsafe {
+        let Some((arr, _pidls)) = item_array(paths) else { return false };
+        let Ok(data) = arr.BindToHandler::<_, IDataObject>(None, &BHID_DataObject) else { return false };
+        let source: IDropSource = DropSource.into();
+        let mut effect = DROPEFFECT_NONE;
+        let hr = DoDragDrop(&data, &source, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &mut effect);
+        hr == DRAGDROP_S_DROP
+    }
+}
+
+pub fn cursor_outside_window(hwnd: isize) -> bool {
+    unsafe {
+        let mut pt = POINT::default();
+        let mut r = RECT::default();
+        if GetCursorPos(&mut pt).is_err() || GetWindowRect(HWND(hwnd as *mut c_void), &mut r).is_err() {
+            return false;
+        }
+        pt.x < r.left || pt.x >= r.right || pt.y < r.top || pt.y >= r.bottom
+    }
+}
+
+// ---------------------------------------------------------------- tema
+
+pub fn accent_color() -> Option<egui::Color32> {
+    unsafe {
+        let mut c = 0u32;
+        let mut opaque = BOOL(0);
+        DwmGetColorizationColor(&mut c, &mut opaque).ok()?;
+        Some(egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8))
+    }
+}
