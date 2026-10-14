@@ -1525,28 +1525,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "hizli-gezgin"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clipboard-win",
- "dirs",
- "eframe",
- "egui",
- "egui_extras",
- "notify",
- "open",
- "raw-window-handle",
- "rayon",
- "serde",
- "serde_json",
- "trash",
- "windows 0.58.0",
- "windows-core 0.58.0",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "home"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3238,6 +3216,28 @@ dependencies = [
  "quote",
  "rustversion",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "swift-explorer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clipboard-win",
+ "dirs",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "notify",
+ "open",
+ "raw-window-handle",
+ "rayon",
+ "serde",
+ "serde_json",
+ "trash",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

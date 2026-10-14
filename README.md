@@ -1,4 +1,4 @@
-# Hızlı Gezgin
+# Swift Explorer
 
 [Türkçe](README.tr.md)
 
@@ -8,7 +8,7 @@ A file manager for Windows that looks and behaves like the Windows 11 File Explo
 
 ## Download
 
-Get `HizliGezgin.exe` from the [Releases](../../releases) page. It is a single file with no installer. Made for Windows 11; Windows 10 should work but hasn't been tested.
+Get `SwiftExplorer.exe` from the [Releases](../../releases) page. It is a single file with no installer. Made for Windows 11; Windows 10 should work but hasn't been tested.
 
 ## What it does
 
@@ -42,11 +42,11 @@ You need Rust 1.82 or newer and Windows.
 cargo build --release
 ```
 
-The executable ends up in `target/release/hizli-gezgin.exe`.
+The executable ends up in `target/release/swift-explorer.exe`.
 
 ## Settings
 
-Settings are stored in `%APPDATA%\HizliGezgin\config.json`. Setting the `HIZLI_GEZGIN_LANG` environment variable to `en` or `tr` overrides the language setting.
+Settings are stored in `%APPDATA%\SwiftExplorer\config.json`. Setting the `SWIFT_EXPLORER_LANG` environment variable to `en` or `tr` overrides the language setting.
 
 ## Known limitations
 

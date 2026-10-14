@@ -1,10 +1,10 @@
 [package]
-name = "hizli-gezgin"
+name = "swift-explorer"
 version = "0.1.0"
 edition = "2021"
 description = "A Windows file manager that looks and works like the Windows 11 File Explorer"
 license = "MIT"
-repository = "https://github.com/misutesu-desu/hizli-gezgin"
+repository = "https://github.com/misutesu-desu/swift-explorer"
 readme = "README.md"
 rust-version = "1.82"
 

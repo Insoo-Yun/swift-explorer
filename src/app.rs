@@ -67,6 +67,11 @@ impl Default for Config {
 }
 
 fn config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("SwiftExplorer").join("config.json"))
+}
+
+/// Uygulamanın eski adıyla (Hızlı Gezgin) kaydedilmiş ayarlar; yeni dosya yoksa bunlar okunur
+fn legacy_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("HizliGezgin").join("config.json"))
 }
 
@@ -297,8 +302,8 @@ fn pal_of(ui: &egui::Ui) -> Pal {
 
 /// Dil ayarını uygular (0 = Windows diline göre)
 fn apply_lang(lang: u8) {
-    // HIZLI_GEZGIN_LANG=en|tr ayarı geçersiz kılar (test ve kısayol için)
-    let lang = match std::env::var("HIZLI_GEZGIN_LANG").as_deref() {
+    // SWIFT_EXPLORER_LANG=en|tr ayarı geçersiz kılar (test ve kısayol için)
+    let lang = match std::env::var("SWIFT_EXPLORER_LANG").as_deref() {
         Ok("tr") => 1,
         Ok("en") => 2,
         _ => lang,
@@ -674,6 +679,7 @@ impl App {
 
         let cfg: Config = config_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
+            .or_else(|| legacy_config_path().and_then(|p| std::fs::read_to_string(p).ok()))
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         let accent = shell::accent_color().unwrap_or(Color32::from_rgb(0, 120, 212));
@@ -3777,7 +3783,7 @@ impl eframe::App for App {
         }
 
         let t = &self.tabs[self.active];
-        let title = format!("{} — Hızlı Gezgin", if t.is_home() { self.loc_name(&t.path) } else { t.path.display().to_string() });
+        let title = format!("{} — Swift Explorer", if t.is_home() { self.loc_name(&t.path) } else { t.path.display().to_string() });
         if title != self.last_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;

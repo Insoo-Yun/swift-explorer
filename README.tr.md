@@ -1,4 +1,4 @@
-# Hızlı Gezgin
+# Swift Explorer
 
 [English](README.md)
 
@@ -8,7 +8,7 @@ Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazıl
 
 ## İndirme
 
-`HizliGezgin.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
+`SwiftExplorer.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
 
 ## Neler var
 
@@ -36,11 +36,11 @@ Rust 1.82 ya da daha yenisi ve Windows gerekir.
 cargo build --release
 ```
 
-Çalıştırılabilir dosya `target/release/hizli-gezgin.exe` konumuna yazılır.
+Çalıştırılabilir dosya `target/release/swift-explorer.exe` konumuna yazılır.
 
 ## Ayarlar
 
-Ayarlar `%APPDATA%\HizliGezgin\config.json` dosyasında tutulur. `HIZLI_GEZGIN_LANG` ortam değişkeni `en` ya da `tr` yapılırsa dil ayarının önüne geçer.
+Ayarlar `%APPDATA%\SwiftExplorer\config.json` dosyasında tutulur. `SWIFT_EXPLORER_LANG` ortam değişkeni `en` ya da `tr` yapılırsa dil ayarının önüne geçer.
 
 ## Bilinen sınırlar
 
