@@ -35,6 +35,8 @@ jobs:
         run: |
           mkdir swift-explorer
           cp target/release/swift-explorer LICENSE swift-explorer/
+          cp packaging/linux/io.github.misutesu_desu.SwiftExplorer.desktop packaging/linux/io.github.misutesu_desu.SwiftExplorer.metainfo.xml swift-explorer/
+          cp assets/icon.png swift-explorer/io.github.misutesu_desu.SwiftExplorer.png
           chmod 755 swift-explorer/swift-explorer
           tar -czf "${{ matrix.asset }}.tar.gz" swift-explorer
       - uses: actions/upload-artifact@v4
