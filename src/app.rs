@@ -329,10 +329,25 @@ fn setup_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Masaüstünün arayüz fontu (fontconfig'in "sans-serif" seçimi)
+/// Masaüstünün arayüz fontu: GNOME'un ayarı (ör. Adwaita Sans), yoksa fontconfig'in "sans-serif" seçimi
 #[cfg(not(windows))]
 fn linux_ui_font() -> Option<Vec<u8>> {
-    let out = std::process::Command::new("fc-match").args(["-f", "%{file}", "sans-serif"]).output().ok()?;
+    gnome_font_family().and_then(|f| font_file(&f)).or_else(|| font_file("sans-serif"))
+}
+
+/// `gsettings` çıktısı "'Adwaita Sans 11'" gibidir: tırnaklar ve sondaki boyut atılır
+#[cfg(not(windows))]
+fn gnome_font_family() -> Option<String> {
+    let out = crate::win::host_command("gsettings").args(["get", "org.gnome.desktop.interface", "font-name"]).output().ok()?;
+    let s = String::from_utf8(out.stdout).ok()?;
+    let s = s.trim().trim_matches('\'');
+    let family = s.rsplit_once(' ').filter(|(_, size)| size.parse::<f32>().is_ok()).map_or(s, |(f, _)| f);
+    (!family.is_empty()).then(|| family.to_string())
+}
+
+#[cfg(not(windows))]
+fn font_file(pattern: &str) -> Option<Vec<u8>> {
+    let out = std::process::Command::new("fc-match").args(["-f", "%{file}", pattern]).output().ok()?;
     let path = String::from_utf8(out.stdout).ok()?;
     let path = path.trim();
     (path.ends_with(".ttf") || path.ends_with(".otf")).then(|| std::fs::read(path).ok()).flatten()
