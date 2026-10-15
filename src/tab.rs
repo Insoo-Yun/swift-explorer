@@ -419,7 +419,14 @@ impl Tab {
                 (show_hidden || !e.hidden) && (pat.is_empty() || pat.matches(&e.name_lower))
             })
             .collect();
-        self.view.sort_by(|&a, &b| fsutil::compare(&entries[a], &entries[b], key, asc));
+        let cmp = |&a: &usize, &b: &usize| fsutil::compare(&entries[a], &entries[b], key, asc);
+        // Büyük klasörlerde (ör. WinSxS) tüm çekirdeklerle sırala; küçüklerde iş parçacığı maliyetine değmez
+        if self.view.len() > 4000 {
+            use rayon::slice::ParallelSliceMut;
+            self.view.par_sort_by(cmp);
+        } else {
+            self.view.sort_by(cmp);
+        }
         self.groups.clear();
         if group_by_date && self.search.is_none() {
             // Explorer gibi: en yeni grup üstte, grup içinde seçili sıralama korunur (kararlı sıralama)

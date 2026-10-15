@@ -98,40 +98,42 @@ pub enum SortKey {
     Size,
 }
 
-/// "dosya2" < "dosya10" olacak şekilde doğal karşılaştırma.
+/// "dosya2" < "dosya10" olacak şekilde doğal karşılaştırma. Bellek ayırmaz: on binlerce
+/// öğeyi sıralarken her karşılaştırmada String oluşturmak belirgin takılmaya yol açıyordu.
+/// UTF-8 bayt sırası kod noktası sırasıyla aynıdır; rakamlar tek bayttır.
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (ai.peek().copied(), bi.peek().copied()) {
-            (None, None) => return Ordering::Equal,
-            (None, _) => return Ordering::Less,
-            (_, None) => return Ordering::Greater,
-            (Some(ca), Some(cb)) if ca.is_ascii_digit() && cb.is_ascii_digit() => {
-                let mut na = String::new();
-                while let Some(c) = ai.peek().copied().filter(char::is_ascii_digit) {
-                    na.push(c);
-                    ai.next();
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        let (ca, cb) = (a[i], b[j]);
+        if ca.is_ascii_digit() && cb.is_ascii_digit() {
+            let digits = |s: &[u8], mut k: usize| {
+                while k < s.len() && s[k] == b'0' {
+                    k += 1;
                 }
-                let mut nb = String::new();
-                while let Some(c) = bi.peek().copied().filter(char::is_ascii_digit) {
-                    nb.push(c);
-                    bi.next();
+                let start = k;
+                while k < s.len() && s[k].is_ascii_digit() {
+                    k += 1;
                 }
-                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
-                let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
-                if o != Ordering::Equal {
-                    return o;
-                }
+                (start, k)
+            };
+            let (sa, ea) = digits(a, i);
+            let (sb, eb) = digits(b, j);
+            let o = (ea - sa).cmp(&(eb - sb)).then_with(|| a[sa..ea].cmp(&b[sb..eb]));
+            if o != Ordering::Equal {
+                return o;
             }
-            (Some(ca), Some(cb)) => {
-                if ca != cb {
-                    return ca.cmp(&cb);
-                }
-                ai.next();
-                bi.next();
+            i = ea;
+            j = eb;
+        } else {
+            if ca != cb {
+                return ca.cmp(&cb);
             }
+            i += 1;
+            j += 1;
         }
     }
+    (a.len() - i).cmp(&(b.len() - j))
 }
 
 pub fn compare(a: &Entry, b: &Entry, key: SortKey, asc: bool) -> Ordering {
@@ -770,3 +772,88 @@ pub fn read_preview(path: &Path) -> PreviewData {
     }
     PreviewData::Text(String::from_utf8_lossy(&buf).into_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Önceki (bellek ayıran) sürüm: yenisi bununla birebir aynı sırayı vermeli
+    fn natural_cmp_reference(a: &str, b: &str) -> Ordering {
+        let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
+        loop {
+            match (ai.peek().copied(), bi.peek().copied()) {
+                (None, None) => return Ordering::Equal,
+                (None, _) => return Ordering::Less,
+                (_, None) => return Ordering::Greater,
+                (Some(ca), Some(cb)) if ca.is_ascii_digit() && cb.is_ascii_digit() => {
+                    let mut na = String::new();
+                    while let Some(c) = ai.peek().copied().filter(char::is_ascii_digit) {
+                        na.push(c);
+                        ai.next();
+                    }
+                    let mut nb = String::new();
+                    while let Some(c) = bi.peek().copied().filter(char::is_ascii_digit) {
+                        nb.push(c);
+                        bi.next();
+                    }
+                    let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                    let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
+                    if o != Ordering::Equal {
+                        return o;
+                    }
+                }
+                (Some(ca), Some(cb)) => {
+                    if ca != cb {
+                        return ca.cmp(&cb);
+                    }
+                    ai.next();
+                    bi.next();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn natural_cmp_matches_reference() {
+        let alphabet: Vec<char> = "0123456789aAbz._- çğışöüİ€😀".chars().collect();
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut words = vec![
+            "dosya2".to_string(), "dosya10".into(), "dosya010".into(), "dosya0010".into(), "a".into(), "".into(),
+            "a1b2".into(), "a01b2".into(), "a1b02".into(), "x9".into(), "x09".into(), "x0".into(), "x".into(),
+        ];
+        for _ in 0..3000 {
+            let n = (rnd() % 10) as usize;
+            words.push((0..n).map(|_| alphabet[(rnd() % alphabet.len() as u64) as usize]).collect());
+        }
+        for a in &words {
+            for b in words.iter().step_by(7) {
+                assert_eq!(natural_cmp(a, b), natural_cmp_reference(a, b), "{a:?} <> {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn natural_cmp_large_sort_is_fast() {
+        // WinSxS benzeri adlar: çok sayıda sayı parçası
+        let names: Vec<String> = (0..15000)
+            .map(|i| format!("amd64_microsoft-windows-{}_31bf3856ad364e35_10.0.{}.{}_none_{:x}", i % 97, 22621 + i % 13, i, i * 7919))
+            .collect();
+        let t = std::time::Instant::now();
+        let mut v: Vec<&String> = names.iter().collect();
+        v.sort_by(|a, b| natural_cmp(a, b));
+        let new = t.elapsed();
+        let t = std::time::Instant::now();
+        let mut v2: Vec<&String> = names.iter().collect();
+        v2.sort_by(|a, b| natural_cmp_reference(a, b));
+        let old = t.elapsed();
+        assert_eq!(v, v2);
+        println!("15000 ad sıralama: yeni {new:?}, eski {old:?}");
+    }
+}
+
