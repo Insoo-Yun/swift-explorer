@@ -768,7 +768,8 @@ impl App {
             active = 0;
         }
         let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
-        let tabs = paths.into_iter().map(|p| Tab::new(p, &ctx)).collect();
+        // Yalnızca etkin sekme hemen yüklenir; diğerleri ilk açıldıklarında
+        let tabs = paths.into_iter().enumerate().map(|(i, p)| if i == active { Tab::new(p, &ctx) } else { Tab::new_lazy(p) }).collect();
 
         let app = App {
             tabs,
@@ -3769,6 +3770,7 @@ impl eframe::App for App {
         let mut actions = Vec::new();
         self.images.poll(ctx);
 
+        self.tabs[self.active].ensure_loaded(ctx);
         self.poll_subdirs();
         for t in &mut self.tabs {
             t.poll(ctx);

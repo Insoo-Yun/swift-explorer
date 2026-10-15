@@ -49,6 +49,8 @@ pub struct Tab {
     pub back: Vec<PathBuf>,
     pub forward: Vec<PathBuf>,
     pub filter: String,
+    /// Kayıtlı ama henüz okunmamış sekme
+    lazy: bool,
     loader: Option<Receiver<LoadMsg>>,
     progressive: bool,
     load_started: Instant,
@@ -101,7 +103,13 @@ pub fn normalize(p: &Path) -> PathBuf {
 
 impl Tab {
     pub fn new(path: PathBuf, ctx: &egui::Context) -> Tab {
-        let mut t = Tab {
+        let mut t = Tab::blank();
+        t.navigate(path, false, ctx);
+        t
+    }
+
+    fn blank() -> Tab {
+        Tab {
             path: PathBuf::new(),
             entries: vec![],
             pending: vec![],
@@ -130,9 +138,20 @@ impl Tab {
             groups: vec![],
             collapsed_groups: HashSet::new(),
             cursor_path: None,
-        };
-        t.navigate(path, false, ctx);
-        t
+            lazy: false,
+        }
+    }
+
+    /// Henüz yüklenmemiş sekme: klasör ilk görüntülendiğinde okunur (`ensure_loaded`)
+    pub fn new_lazy(path: PathBuf) -> Tab {
+        Tab { path: normalize(&path), lazy: true, ..Tab::blank() }
+    }
+
+    pub fn ensure_loaded(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.lazy) {
+            let p = std::mem::take(&mut self.path);
+            self.navigate(p, false, ctx);
+        }
     }
 
     pub fn title(&self) -> String {
