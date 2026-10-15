@@ -10,7 +10,7 @@ A file manager for Windows and Linux that looks and behaves like the Windows 11 
 
 Get `SwiftExplorer.exe` from the [Releases](../../releases) page. It is a single file with no installer. Made for Windows 11; Windows 10 should work but hasn't been tested.
 
-On Linux, download `swift-explorer-linux-x86_64`, make it executable with `chmod +x` and run it.
+On Linux, download `swift-explorer-linux-x86_64.tar.gz`, extract it and run `swift-explorer`.
 
 ## What it does
 

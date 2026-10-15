@@ -10,7 +10,7 @@ Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazıl
 
 `SwiftExplorer.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
 
-Linux'ta `swift-explorer-linux-x86_64` dosyasını indirin, `chmod +x` ile çalıştırılabilir yapıp açın.
+Linux'ta `swift-explorer-linux-x86_64.tar.gz` dosyasını indirin, arşivden çıkarın ve içindeki `swift-explorer` dosyasını açın.
 
 ## Neler var
 

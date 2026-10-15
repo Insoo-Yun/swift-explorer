@@ -30,12 +30,19 @@ jobs:
       - name: Rename binary
         shell: bash
         run: cp "target/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+      - name: Package tar.gz
+        if: runner.os == 'Linux'
+        run: |
+          mkdir swift-explorer
+          cp target/release/swift-explorer LICENSE swift-explorer/
+          chmod 755 swift-explorer/swift-explorer
+          tar -czf "${{ matrix.asset }}.tar.gz" swift-explorer
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}*
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.asset }}
+          files: ${{ matrix.asset }}*
