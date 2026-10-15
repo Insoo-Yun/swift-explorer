@@ -57,6 +57,12 @@ pub fn shell_image(path: &Path, size: i32, icon_only: bool) -> Option<egui::Colo
 }
 
 unsafe fn hbitmap_to_image(hbm: HBITMAP) -> Option<egui::ColorImage> {
+    let (buf, w, h) = hbitmap_bgra(hbm)?;
+    Some(bgra_to_image(buf, w, h))
+}
+
+/// HBITMAP'in ham 32 bit BGRA pikselleri (yukarıdan aşağı)
+unsafe fn hbitmap_bgra(hbm: HBITMAP) -> Option<(Vec<u8>, usize, usize)> {
     let mut bm = BITMAP::default();
     if GetObjectW(hbm, std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut c_void)) == 0 {
         return None;
@@ -84,15 +90,30 @@ unsafe fn hbitmap_to_image(hbm: HBITMAP) -> Option<egui::ColorImage> {
     if lines == 0 {
         return None;
     }
+    Some((buf, w as usize, h as usize))
+}
+
+fn bgra_to_image(mut buf: Vec<u8>, w: usize, h: usize) -> egui::ColorImage {
     // JPEG küçük resimlerinde alfa kanalı boş gelir
     let no_alpha = buf.chunks_exact(4).all(|p| p[3] == 0);
+    // Shell ikonları çoğu zaman ön-çarpılmamış alfa ile gelir; öyleyse ön-çarpılmış
+    // gibi çizmek yarı saydam kenarlarda beyaz hale bırakır. Rengi alfadan büyük
+    // bir piksel varsa veri ön-çarpılmamıştır.
+    let straight = !no_alpha && buf.chunks_exact(4).any(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3]);
     for p in buf.chunks_exact_mut(4) {
         p.swap(0, 2); // BGRA → RGBA
         if no_alpha {
             p[3] = 255;
+        } else if straight {
+            // Windows gibi gamma uzayında çarp. egui 0.31'in from_rgba_unmultiplied'ı
+            // lineer uzayda çarpar; yarı saydam kenarlar yine fazla parlak çıkar.
+            let a = p[3] as u32;
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
         }
     }
-    Some(egui::ColorImage::from_rgba_premultiplied([w as usize, h as usize], &buf))
+    egui::ColorImage::from_rgba_premultiplied([w, h], &buf)
 }
 
 pub fn type_name(ext: &str) -> String {
@@ -325,5 +346,50 @@ pub fn accent_color() -> Option<egui::Color32> {
         let mut opaque = BOOL(0);
         DwmGetColorizationColor(&mut c, &mut opaque).ok()?;
         Some(egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ön-çarpılmış pikselde hiçbir renk kanalı alfadan büyük olamaz; olursa
+    /// çizimde yarı saydam kenarlar beyaza çalar.
+    fn bad_pixels(img: &egui::ColorImage) -> usize {
+        img.pixels.iter().filter(|c| c.r() > c.a() || c.g() > c.a() || c.b() > c.a()).count()
+    }
+
+    #[test]
+    fn shell_icons_have_valid_premultiplied_alpha() {
+        init_worker_thread();
+        let win = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+        let files = [
+            format!(r"{win}\explorer.exe"),
+            format!(r"{win}\notepad.exe"),
+            format!(r"{win}\regedit.exe"),
+            format!(r"{win}\System32"),
+            format!(r"{win}\win.ini"),
+            format!(r"{win}\System32\cmd.exe"),
+        ];
+        let mut straight_inputs = 0;
+        for f in &files {
+            for size in [16, 32, 48, 96, 256] {
+                let raw = unsafe {
+                    let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&hs(Path::new(f)), None).unwrap();
+                    let hbm = factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).unwrap();
+                    let r = hbitmap_bgra(hbm).unwrap();
+                    let _ = DeleteObject(hbm);
+                    r
+                };
+                let raw_bad = raw.0.chunks_exact(4).filter(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3]).count();
+                if raw_bad > 0 {
+                    straight_inputs += 1;
+                }
+                let img = bgra_to_image(raw.0, raw.1, raw.2);
+                println!("{f} @{size}: ham geçersiz piksel {raw_bad} → dönüşümden sonra {}", bad_pixels(&img));
+                assert_eq!(bad_pixels(&img), 0, "{f} @{size}");
+            }
+        }
+        println!("ön-çarpılmamış gelen ikon sayısı: {straight_inputs}");
     }
 }
