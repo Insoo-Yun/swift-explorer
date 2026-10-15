@@ -9,6 +9,11 @@ pub use crate::images::{ImageCache, Img};
 /// Görüntü iş parçacığı başlarken bir kez çağrılır (Linux'ta hazırlık gerekmez).
 pub fn init_worker_thread() {}
 
+/// Sistem ölçeği; Linux'ta pencere açılmadan bilinemez
+pub fn system_scale() -> f32 {
+    1.0
+}
+
 fn themes() -> &'static [String] {
     static THEMES: OnceLock<Vec<String>> = OnceLock::new();
     THEMES.get_or_init(|| {

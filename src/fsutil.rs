@@ -320,13 +320,38 @@ pub enum LoadMsg {
 /// Dizini arka planda okur. Windows'ta `DirEntry::metadata` ek sistem çağrısı yapmaz
 /// (FindNextFile verisinden gelir), bu yüzden büyük klasörler bile çok hızlı listelenir.
 pub fn spawn_load(path: PathBuf, ctx: egui::Context) -> Receiver<LoadMsg> {
+    if let Some(rx) = take_prefetch(&path) {
+        return rx;
+    }
+    spawn_load_with(path, move || ctx.request_repaint())
+}
+
+/// Açılışta, pencere ve GPU hazırlanırken başlatılan dizin okuması
+static PREFETCH: Mutex<Option<(PathBuf, Receiver<LoadMsg>)>> = Mutex::new(None);
+
+/// İlk sekmenin klasörünü pencere beklenmeden okumaya başlar; `spawn_load` aynı
+/// yol için çağrılınca bu sonuç kullanılır.
+pub fn prefetch(path: PathBuf) {
+    let rx = spawn_load_with(path.clone(), crate::images::repaint);
+    *PREFETCH.lock().unwrap() = Some((path, rx));
+}
+
+fn take_prefetch(path: &Path) -> Option<Receiver<LoadMsg>> {
+    let mut slot = PREFETCH.lock().unwrap();
+    match slot.take() {
+        Some((p, rx)) if p == path => Some(rx),
+        _ => None, // başka bir yere gidildi; eski sonuç atılır
+    }
+}
+
+fn spawn_load_with(path: PathBuf, repaint: impl Fn() + Send + 'static) -> Receiver<LoadMsg> {
     let (tx, rx) = channel();
     thread::spawn(move || {
         let rd = match fs::read_dir(&path) {
             Ok(rd) => rd,
             Err(e) => {
                 let _ = tx.send(LoadMsg::Error(e.to_string()));
-                ctx.request_repaint();
+                repaint();
                 return;
             }
         };
@@ -340,13 +365,13 @@ pub fn spawn_load(path: PathBuf, ctx: egui::Context) -> Receiver<LoadMsg> {
                 if tx.send(LoadMsg::Batch(std::mem::take(&mut batch))).is_err() {
                     return;
                 }
-                ctx.request_repaint();
+                repaint();
                 last = Instant::now();
             }
         }
         let _ = tx.send(LoadMsg::Batch(batch));
         let _ = tx.send(LoadMsg::Done);
-        ctx.request_repaint();
+        repaint();
     });
     rx
 }

@@ -70,6 +70,82 @@ fn config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("SwiftExplorer").join("config.json"))
 }
 
+fn load_config() -> Config {
+    config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .or_else(|| legacy_config_path().and_then(|p| std::fs::read_to_string(p).ok()))
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Açılacak sekmeler ve etkin olanın sırası
+fn startup_tabs(cfg: &Config, start: Option<PathBuf>) -> (Vec<PathBuf>, usize) {
+    // Bir klasörle başlatıldıysa (ör. "Birlikte aç", Ctrl+N) yalnızca onu aç
+    if let Some(s) = start.filter(|p| crate::tab::is_virtual(p) || p.is_dir()) {
+        return (vec![s], 0);
+    }
+    let paths: Vec<PathBuf> = cfg.tabs.iter().filter(|p| crate::tab::is_virtual(p) || p.is_dir()).cloned().collect();
+    if paths.is_empty() {
+        return (vec![PathBuf::new()], 0); // Giriş
+    }
+    let active = cfg.active.min(paths.len() - 1);
+    (paths, active)
+}
+
+/// Pencere ve GPU sürücüsü hazırlanırken (~200 ms) ilk ekranı hazırlar: açılış klasörünü
+/// okur, ikon iş parçacıklarını başlatır ve ilk görünecek öğelerin ikon/küçük resimlerini
+/// arayüzün isteyeceği boyut ve türde önceden üretir.
+pub fn prefetch_startup(start: Option<PathBuf>) {
+    crate::images::start();
+    let cfg = load_config();
+    let (paths, active) = startup_tabs(&cfg, start);
+    let dir = paths.get(active).filter(|p| !crate::tab::is_virtual(p)).map(|p| normalize(p));
+    if let Some(d) = &dir {
+        fsutil::prefetch(d.clone());
+    }
+    let level = cfg.view_level.min(VIEW_LEVELS.len() - 1);
+    let grouped = dir.as_ref().is_some_and(|d| cfg.grouped.contains(d));
+    let (sort, asc, show_hidden) = (cfg.sort, cfg.asc, cfg.show_hidden);
+    std::thread::spawn(move || {
+        let scale = shell::system_scale();
+        let px = |logical: f32| px_bucket(logical * scale);
+        let mut reqs = Vec::new();
+        // İlk ekrandaki öğeler, arayüzdeki sırayla (rebuild_view ile aynı kurallar)
+        if let Some(dir) = &dir {
+            let mut entries: Vec<Entry> = std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|de| de.metadata().ok().map(|md| Entry::from_metadata(de.path(), &md)))
+                .filter(|e| show_hidden || !e.hidden)
+                .collect();
+            entries.sort_by(|a, b| fsutil::compare(a, b, sort, asc));
+            if grouped {
+                let now = chrono::Local::now();
+                entries.sort_by_key(|e| fsutil::date_group(e.modified, now));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for e in entries.iter().take(60) {
+                let (p, icon_only) = if level == 0 {
+                    (px(18.0), true)
+                } else {
+                    (px(VIEW_LEVELS[level].0 as f32), e.is_dir || !fsutil::has_thumbnail(&e.ext))
+                };
+                let key = if icon_only { icon_key(&e.path, e.is_dir, &e.ext, p, e.plain_dir) } else { format!("t{p}:{}", e.path.display()) };
+                if seen.insert(key) {
+                    reqs.push((e.path.clone(), p, icon_only));
+                }
+            }
+        }
+        // Gezinti bölmesi ve sekme şeridi
+        let small = px(16.0);
+        for p in known_folders().into_iter().map(|(_, _, p)| p).chain(paths.iter().map(|p| App::loc_icon(p))) {
+            reqs.push((p, small, true));
+        }
+        crate::images::prefetch(reqs);
+    });
+}
+
 /// Uygulamanın eski adıyla (Hızlı Gezgin) kaydedilmiş ayarlar; yeni dosya yoksa bunlar okunur
 fn legacy_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("HizliGezgin").join("config.json"))
@@ -200,6 +276,11 @@ pub struct App {
     silent_jobs: Vec<usize>,
     saved_config: String,
     last_autosave: Instant,
+    /// Açılış: pencere ilk içerik (liste + ikonlar) hazır olana dek gizli
+    #[cfg_attr(not(windows), allow(dead_code))]
+    started: Instant,
+    frames: u32,
+    revealed: bool,
     ctx: egui::Context,
 }
 
@@ -652,7 +733,12 @@ fn icon_key(path: &Path, is_dir: bool, ext: &str, px: i32, plain_dir: bool) -> S
 }
 
 fn icon_px(ctx: &egui::Context, logical: f32) -> i32 {
-    let want = (logical * ctx.pixels_per_point()).ceil() as i32;
+    px_bucket(logical * ctx.pixels_per_point())
+}
+
+/// İstenen fiziksel boyutu karşılayan en küçük standart ikon boyutu
+fn px_bucket(physical: f32) -> i32 {
+    let want = physical.ceil() as i32;
     [16, 24, 32, 48, 64, 96, 128, 256, 512].into_iter().find(|&b| b >= want).unwrap_or(512)
 }
 
@@ -749,26 +835,12 @@ impl App {
         let ctx = cc.egui_ctx.clone();
         setup_fonts(&ctx);
 
-        let cfg: Config = config_path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .or_else(|| legacy_config_path().and_then(|p| std::fs::read_to_string(p).ok()))
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let cfg = load_config();
         let accent = shell::accent_color().unwrap_or(Color32::from_rgb(0, 120, 212));
         apply_lang(cfg.lang);
         apply_theme(&ctx, accent, cfg.theme);
 
-        let mut paths: Vec<PathBuf> = cfg.tabs.iter().filter(|p| crate::tab::is_virtual(p) || p.is_dir()).cloned().collect();
-        let mut active = cfg.active.min(paths.len().saturating_sub(1));
-        // Bir klasörle başlatıldıysa (ör. "Birlikte aç", Ctrl+N) yalnızca onu aç
-        if let Some(s) = start.filter(|p| crate::tab::is_virtual(p) || p.is_dir()) {
-            paths = vec![s];
-            active = 0;
-        }
-        if paths.is_empty() {
-            paths.push(PathBuf::new()); // Giriş
-            active = 0;
-        }
+        let (paths, active) = startup_tabs(&cfg, start);
         let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
         // Yalnızca etkin sekme hemen yüklenir; diğerleri ilk açıldıklarında
         let tabs = paths.into_iter().enumerate().map(|(i, p)| if i == active { Tab::new(p, &ctx) } else { Tab::new_lazy(p) }).collect();
@@ -824,6 +896,9 @@ impl App {
             silent_jobs: vec![],
             saved_config: String::new(),
             last_autosave: Instant::now(),
+            started: Instant::now(),
+            frames: 0,
+            revealed: false,
             ctx,
         };
         app.refresh_drives();
@@ -868,6 +943,39 @@ impl App {
             *store.lock().unwrap() = d;
             ctx.request_repaint();
         });
+    }
+
+    /// Linux'ta pencere eframe'in ilk karesiyle görünür; yalnızca açılış ön
+    /// sonuçlarından kullanılmayanları bırakır.
+    #[cfg(not(windows))]
+    fn reveal_when_ready(&mut self, _ctx: &egui::Context) {
+        if !self.revealed {
+            self.frames += 1;
+            if self.frames >= 2 {
+                crate::images::end_prefetch();
+                self.revealed = true;
+            }
+        }
+    }
+
+    /// Pencereyi içerik hazır olunca tek seferde gösterir: önce boş liste,
+    /// sonra tek tek beliren ikonlar yerine. En fazla 350 ms bekler.
+    #[cfg(windows)]
+    fn reveal_when_ready(&mut self, ctx: &egui::Context) {
+        if self.revealed {
+            return;
+        }
+        let Some(hwnd) = self.hwnd else { return };
+        self.frames += 1;
+        let ready = !self.tabs[self.active].is_loading() && !self.images.busy();
+        if self.frames >= 2 && (ready || self.started.elapsed() >= Duration::from_millis(350)) {
+            shell::set_cloak(hwnd, false);
+            shell::end_startup_cloak();
+            crate::images::end_prefetch();
+            self.revealed = true;
+        } else {
+            ctx.request_repaint();
+        }
     }
 
     fn tab(&mut self) -> &mut Tab {
@@ -3765,12 +3873,16 @@ impl eframe::App for App {
                     let hwnd = w.hwnd.get();
                     self.hwnd = Some(hwnd);
                     shell::install_subclass(hwnd);
+                    // eframe pencereyi ilk kareden sonra gösterir; o an DWM henüz
+                    // GL yüzeyini almadığından bir kare beyaz parlar. Hazır olana dek gizle.
+                    shell::set_cloak(hwnd, true);
                 }
             }
         }
 
         let mut actions = Vec::new();
         self.images.poll(ctx);
+        self.reveal_when_ready(ctx);
 
         self.tabs[self.active].ensure_loaded(ctx);
         self.poll_subdirs();

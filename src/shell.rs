@@ -4,13 +4,14 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR};
 use windows::Win32::Foundation::{
     BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, LPARAM, LRESULT, POINT, RECT,
     SIZE, S_OK, WPARAM,
 };
-use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
+use windows::Win32::Graphics::Dwm::{DwmGetColorizationColor, DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     DIB_RGB_COLORS, HBITMAP,
@@ -23,7 +24,7 @@ use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3, IShellItemArray,
     IShellItemImageFactory, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetFileInfoW,
-    SHParseDisplayName, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL,
+    SHParseDisplayName, RemoveWindowSubclass, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL,
     CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME,
     SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
 };
@@ -31,7 +32,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, DestroyMenu, GetCursorPos, GetWindowRect, IsZoomed, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
     HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_SHOWNORMAL, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT,
+    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, HHOOK, WH_CBT, WS_CHILD,
+    WM_CREATE, WM_SHOWWINDOW,
 };
+use windows::Win32::System::Threading::GetCurrentThreadId;
 
 pub use crate::images::{ImageCache, Img};
 
@@ -173,6 +177,93 @@ fn item_array(paths: &[PathBuf]) -> Option<(IShellItemArray, Pidls)> {
 
 thread_local! {
     static ACTIVE_MENU: RefCell<Option<IContextMenu>> = const { RefCell::new(None) };
+}
+
+static STARTUP_HOOK: AtomicIsize = AtomicIsize::new(0);
+static STARTUP_HWND: AtomicIsize = AtomicIsize::new(0);
+const STARTUP_SUBCLASS: usize = 0x5345;
+
+/// Ana pencereyi daha gösterilmeden gizler. winit pencereyi GL yüzeyi hazır olmadan
+/// (~250 ms önce) görünür yapabiliyor; o sürede boş/beyaz yüzey ekrana yansır.
+/// Oluşturulan pencere alt sınıflanır ve gösterilmeden hemen önce DWM ile gizlenir.
+pub fn begin_startup_cloak() {
+    unsafe {
+        if let Ok(h) = SetWindowsHookExW(WH_CBT, Some(cbt_proc), None, GetCurrentThreadId()) {
+            STARTUP_HOOK.store(h.0 as isize, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Açılış gizlemesini kaldırır; pencere bundan sonra normal davranır.
+pub fn end_startup_cloak() {
+    unhook_startup();
+    let hwnd = STARTUP_HWND.swap(0, Ordering::Relaxed);
+    if hwnd != 0 {
+        unsafe {
+            let _ = RemoveWindowSubclass(HWND(hwnd as *mut c_void), Some(startup_subclass), STARTUP_SUBCLASS);
+        }
+    }
+}
+
+fn unhook_startup() {
+    let h = STARTUP_HOOK.swap(0, Ordering::Relaxed);
+    if h != 0 {
+        unsafe {
+            let _ = UnhookWindowsHookEx(HHOOK(h as *mut c_void));
+        }
+    }
+}
+
+unsafe extern "system" fn cbt_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if code == HCBT_CREATEWND as i32 && STARTUP_HWND.load(Ordering::Relaxed) == 0 {
+        let cs = &*(*(lp.0 as *const CBT_CREATEWNDW)).lpcs;
+        let top_level = cs.hwndParent.is_invalid() && (cs.style & WS_CHILD.0 as i32) == 0;
+        if top_level && !cs.lpszName.is_null() && cs.lpszName.to_string().is_ok_and(|t| t == crate::APP_NAME) {
+            let hwnd = HWND(wp.0 as *mut c_void);
+            if SetWindowSubclass(hwnd, Some(startup_subclass), STARTUP_SUBCLASS, 0).as_bool() {
+                STARTUP_HWND.store(wp.0 as isize, Ordering::Relaxed);
+            }
+        }
+    }
+    let r = CallNextHookEx(None, code, wp, lp);
+    if STARTUP_HWND.load(Ordering::Relaxed) != 0 {
+        unhook_startup(); // ana pencere bulundu, kancaya artık gerek yok
+    }
+    r
+}
+
+unsafe extern "system" fn startup_subclass(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    match msg {
+        WM_CREATE => {
+            let r = DefSubclassProc(hwnd, msg, wp, lp);
+            set_cloak(hwnd.0 as isize, true);
+            r
+        }
+        WM_SHOWWINDOW if wp.0 != 0 => {
+            set_cloak(hwnd.0 as isize, true);
+            DefSubclassProc(hwnd, msg, wp, lp)
+        }
+        _ => DefSubclassProc(hwnd, msg, wp, lp),
+    }
+}
+
+/// Sistem ölçeği (ör. %150 → 1.5). Süreci, winit'in de yaptığı gibi monitör başına
+/// DPI farkında yapar; aksi halde Windows her zaman 96 DPI bildirir.
+pub fn system_scale() -> f32 {
+    use windows::Win32::UI::HiDpi::{GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        GetDpiForSystem().max(96) as f32 / 96.0
+    }
+}
+
+/// Pencereyi DWM düzeyinde gizler/gösterir. Gizliyken çizim sürer ama ekrana
+/// hiçbir şey (ilk karedeki beyaz yüzey dahil) yansımaz.
+pub fn set_cloak(hwnd: isize, cloak: bool) {
+    unsafe {
+        let v = BOOL::from(cloak);
+        let _ = DwmSetWindowAttribute(HWND(hwnd as *mut c_void), DWMWA_CLOAK, &v as *const BOOL as *const c_void, std::mem::size_of::<BOOL>() as u32);
+    }
 }
 
 /// Ana pencereyi alt sınıflar: "Gönder", "Birlikte aç" gibi alt menüler

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 #[derive(Clone)]
 pub enum Img {
@@ -13,11 +13,147 @@ pub enum Img {
     Failed,
 }
 
+/// `key` boşsa açılış ön isteğidir: sonuç `EARLY` tablosuna yazılır
 struct Req {
     key: String,
     path: PathBuf,
     size: i32,
     icon_only: bool,
+}
+
+type Done = (String, Option<egui::ColorImage>);
+type EarlyKey = (PathBuf, i32, bool);
+
+enum Early {
+    /// Üretiliyor; arayüz bu arada isterse sonucu bu anahtarla kanala gönder
+    Pending(Option<String>),
+    Done(Option<egui::ColorImage>),
+}
+
+/// Arka plan iş parçacıkları süreç başına bir kez başlar. `start` pencere ve GPU
+/// hazırlanırken çağrılır; Windows kabuğunun soğuk açılışı (COM, ikon işleyicileri)
+/// ve ilk ekranın ikonları pencere beklenirken biter.
+struct Workers {
+    queue: Arc<(Mutex<Vec<Req>>, Condvar)>,
+    tx: Sender<Done>,
+    rx: Mutex<Option<Receiver<Done>>>,
+}
+
+static WORKERS: OnceLock<Workers> = OnceLock::new();
+static EARLY: Mutex<Option<HashMap<EarlyKey, Early>>> = Mutex::new(None);
+
+/// Bitince yeniden çizim istenecek arayüz bağlamı (pencere hazır olunca atanır)
+pub static UI_CTX: OnceLock<egui::Context> = OnceLock::new();
+
+pub fn repaint() {
+    if let Some(ctx) = UI_CTX.get() {
+        ctx.request_repaint();
+    }
+}
+
+fn produce(req: &Req) -> Option<egui::ColorImage> {
+    // Shell ara sıra (özellikle aynı anda çok istekte) başarısız olur; birkaç kez dene
+    let mut img = None;
+    for attempt in 0..3 {
+        img = crate::shell::shell_image(&req.path, req.size, req.icon_only);
+        if img.is_some() {
+            break;
+        }
+        if !req.icon_only && attempt == 1 {
+            // Küçük resim yoksa ikona düş
+            img = crate::shell::shell_image(&req.path, req.size, true);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    img
+}
+
+fn workers() -> &'static Workers {
+    WORKERS.get_or_init(|| {
+        let queue: Arc<(Mutex<Vec<Req>>, Condvar)> = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let (tx, rx): (Sender<Done>, _) = channel();
+        for _ in 0..4 {
+            let q = queue.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                crate::shell::init_worker_thread();
+                loop {
+                    let req = {
+                        let (m, cv) = &*q;
+                        let mut g = m.lock().unwrap();
+                        loop {
+                            if let Some(r) = g.pop() {
+                                break r;
+                            }
+                            g = cv.wait(g).unwrap();
+                        }
+                    };
+                    let img = produce(&req);
+                    let key = if req.key.is_empty() {
+                        let mut early = EARLY.lock().unwrap();
+                        let Some(map) = early.as_mut() else { continue };
+                        let k = (req.path, req.size, req.icon_only);
+                        match map.get_mut(&k) {
+                            Some(Early::Pending(Some(_))) => {
+                                let Some(Early::Pending(Some(key))) = map.remove(&k) else { unreachable!() };
+                                key
+                            }
+                            Some(e) => {
+                                *e = Early::Done(img);
+                                continue;
+                            }
+                            None => continue, // açılış bitti, artık istenmiyor
+                        }
+                    } else {
+                        req.key
+                    };
+                    if tx.send((key, img)).is_err() {
+                        return;
+                    }
+                    repaint();
+                }
+            });
+        }
+        Workers { queue, tx, rx: Mutex::new(Some(rx)) }
+    })
+}
+
+/// İş parçacıklarını başlatır (zaten başladıysa bir şey yapmaz)
+pub fn start() {
+    workers();
+}
+
+/// Açılışta ilk ekranda istenecek görüntüleri (yol, piksel, yalnızca ikon) önceden üretir.
+/// Arayüz aynı isteği yapınca sonuç beklemeden kullanılır.
+pub fn prefetch(items: Vec<EarlyKey>) {
+    let mut reqs = Vec::with_capacity(items.len());
+    {
+        let mut early = EARLY.lock().unwrap();
+        let map = early.get_or_insert_with(HashMap::new);
+        for (path, size, icon_only) in items {
+            if map.insert((path.clone(), size, icon_only), Early::Pending(None)).is_none() {
+                reqs.push(Req { key: String::new(), path, size, icon_only });
+            }
+        }
+    }
+    // LIFO kuyruk: ilk öğe en önce işlensin diye ters sırayla ve dibe ekle
+    reqs.reverse();
+    let (m, cv) = &*workers().queue;
+    m.lock().unwrap().splice(0..0, reqs);
+    cv.notify_all();
+}
+
+/// Açılış bitti: kullanılmayan ön sonuçları bırak. Üretimi süren ve arayüzün beklediği
+/// istekler (Pending(Some)) iş parçacığı bitirince teslim edilir.
+pub fn end_prefetch() {
+    let mut early = EARLY.lock().unwrap();
+    if let Some(map) = early.as_mut() {
+        map.retain(|_, e| matches!(e, Early::Pending(Some(_))));
+        if map.is_empty() {
+            *early = None;
+        }
+    }
 }
 
 /// Önbellekteki görüntülerin toplam piksel belleği (GPU/paylaşımlı bellek) üst sınırı.
@@ -40,52 +176,24 @@ pub struct ImageCache {
     unique_bytes: usize,
     frame: u64,
     queue: Arc<(Mutex<Vec<Req>>, Condvar)>,
-    rx: Receiver<(String, Option<egui::ColorImage>)>,
+    rx: Receiver<Done>,
+    tx: Sender<Done>,
 }
 
 impl ImageCache {
     pub fn new(ctx: &egui::Context) -> ImageCache {
-        let queue: Arc<(Mutex<Vec<Req>>, Condvar)> = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
-        let (tx, rx): (Sender<(String, Option<egui::ColorImage>)>, _) = channel();
-        for _ in 0..4 {
-            let q = queue.clone();
-            let tx = tx.clone();
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                crate::shell::init_worker_thread();
-                loop {
-                    let req = {
-                        let (m, cv) = &*q;
-                        let mut g = m.lock().unwrap();
-                        loop {
-                            if let Some(r) = g.pop() {
-                                break r;
-                            }
-                            g = cv.wait(g).unwrap();
-                        }
-                    };
-                    // Shell ara sıra (özellikle aynı anda çok istekte) başarısız olur; birkaç kez dene
-                    let mut img = None;
-                    for attempt in 0..3 {
-                        img = crate::shell::shell_image(&req.path, req.size, req.icon_only);
-                        if img.is_some() {
-                            break;
-                        }
-                        if !req.icon_only && attempt == 1 {
-                            // Küçük resim yoksa ikona düş
-                            img = crate::shell::shell_image(&req.path, req.size, true);
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(30));
-                    }
-                    if tx.send((req.key, img)).is_err() {
-                        return;
-                    }
-                    ctx.request_repaint();
-                }
-            });
+        let _ = UI_CTX.set(ctx.clone());
+        let w = workers();
+        let rx = w.rx.lock().unwrap().take().expect("ImageCache yalnızca bir kez oluşturulur");
+        ImageCache {
+            textures: HashMap::new(),
+            unique: HashMap::new(),
+            unique_bytes: 0,
+            frame: 0,
+            queue: w.queue.clone(),
+            rx,
+            tx: w.tx.clone(),
         }
-        ImageCache { textures: HashMap::new(), unique: HashMap::new(), unique_bytes: 0, frame: 0, queue, rx }
     }
 
     pub fn get(&mut self, key: &str, path: &Path, size: i32, icon_only: bool) -> Img {
@@ -94,18 +202,54 @@ impl ImageCache {
             return t.img.clone();
         }
         self.textures.insert(key.to_string(), Slot { img: Img::Pending, used: self.frame });
+        if self.take_early(key, path, size, icon_only) {
+            return Img::Pending;
+        }
         let (m, cv) = &*self.queue;
         m.lock().unwrap().push(Req { key: key.to_string(), path: path.to_path_buf(), size, icon_only });
         cv.notify_one();
         Img::Pending
     }
 
+    /// Açılışta önceden istenmiş bir görüntüyse onu kullanır; hazırsa bir sonraki
+    /// `poll`'da, değilse üretilince gelir. Yeni istek gerekmez.
+    fn take_early(&mut self, key: &str, path: &Path, size: i32, icon_only: bool) -> bool {
+        let mut early = EARLY.lock().unwrap();
+        let Some(map) = early.as_mut() else { return false };
+        let k = (path.to_path_buf(), size, icon_only);
+        match map.get_mut(&k) {
+            Some(Early::Pending(slot @ None)) => {
+                *slot = Some(key.to_string());
+                true
+            }
+            Some(Early::Done(_)) => {
+                let Some(Early::Done(img)) = map.remove(&k) else { unreachable!() };
+                let _ = self.tx.send((key.to_string(), img));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Yüklenmeyi bekleyen görüntü var mı (açılışta pencereyi göstermek için)
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn busy(&self) -> bool {
+        self.textures.values().any(|t| matches!(t.img, Img::Pending))
+    }
+
     /// Bekleyen (henüz işlenmemiş) istekleri atar; klasör değişince eski istekler beklemesin.
+    /// Açılış ön istekleri kuyrukta kalır; ilgili sekme/görünüm hâlâ isteyebilir.
     pub fn drop_pending(&mut self) {
         let mut q = self.queue.0.lock().unwrap();
+        let mut keep = Vec::new();
         for r in q.drain(..) {
-            self.textures.remove(&r.key);
+            if r.key.is_empty() {
+                keep.push(r);
+            } else {
+                self.textures.remove(&r.key);
+            }
         }
+        *q = keep;
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
