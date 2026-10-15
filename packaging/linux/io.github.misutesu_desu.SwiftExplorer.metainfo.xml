@@ -41,6 +41,16 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.3.0" date="2026-10-16">
+      <description>
+        <p>Flatpak package, an install script for Linux, and faster startup.</p>
+        <ul>
+          <li>Typing cmd, powershell or terminal in the address bar opens a terminal in the current folder.</li>
+          <li>Uses the GNOME interface font and shows the right icon on Wayland.</li>
+          <li>Large folders sort faster, and network drives no longer freeze the window.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-15">
       <description>
         <p>First Linux build.</p>
