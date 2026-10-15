@@ -62,6 +62,8 @@ pub struct Tab {
     refresh_at: Option<Instant>,
     pub search: Option<Search>,
     pub free_space: Option<(u64, u64)>,
+    /// Boş alan arka planda sorgulanır (ağ sürücülerinde saniyeler sürebilir)
+    free_rx: Option<Receiver<Option<(u64, u64)>>>,
     /// Boşsa gruplama yok
     pub groups: Vec<Group>,
     pub collapsed_groups: HashSet<String>,
@@ -124,6 +126,7 @@ impl Tab {
             refresh_at: None,
             search: None,
             free_space: None,
+            free_rx: None,
             groups: vec![],
             collapsed_groups: HashSet::new(),
             cursor_path: None,
@@ -188,7 +191,8 @@ impl Tab {
             self.load_time = None;
             return;
         }
-        self.free_space = crate::win::disk_space(&self.path);
+        self.free_space = None;
+        self.refresh_free_space(ctx);
         self.load(true, ctx);
         self.watch(ctx);
     }
@@ -325,8 +329,22 @@ impl Tab {
         self.view_dirty = true;
     }
 
+    pub fn refresh_free_space(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let (path, ctx) = (self.path.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::win::disk_space(&path));
+            ctx.request_repaint();
+        });
+        self.free_rx = Some(rx);
+    }
+
     /// Arka plan kanallarını boşaltır. Her karede tüm sekmeler için çağrılır.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(Ok(v)) = self.free_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.free_space = v;
+            self.free_rx = None;
+        }
         let mut finished = false;
         if let Some(rx) = &self.loader {
             loop {
@@ -380,7 +398,7 @@ impl Tab {
             let now = Instant::now();
             if now >= t && self.loader.is_none() {
                 self.refresh_at = None;
-                self.free_space = crate::win::disk_space(&self.path);
+                self.refresh_free_space(ctx);
                 self.load(false, ctx);
             } else {
                 ctx.request_repaint_after(t.saturating_duration_since(now).max(Duration::from_millis(16)));

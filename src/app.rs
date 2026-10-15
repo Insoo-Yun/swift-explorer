@@ -184,8 +184,12 @@ pub struct App {
     hwnd: Option<isize>,
     renaming: Option<Renaming>,
     undo: Vec<UndoOp>,
-    tree_cache: HashMap<PathBuf, Vec<PathBuf>>,
-    child_cache: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Alt klasör listeleri (gezinti ağacı, adres çubuğu). Arka planda okunur; paylaşımlı
+    /// tutulur ki her karede kopyalanmasın.
+    subdirs: HashMap<PathBuf, Arc<[PathBuf]>>,
+    subdirs_pending: std::collections::HashSet<PathBuf>,
+    subdirs_tx: std::sync::mpsc::Sender<(PathBuf, bool, Vec<PathBuf>)>,
+    subdirs_rx: std::sync::mpsc::Receiver<(PathBuf, bool, Vec<PathBuf>)>,
     grid_cols: usize,
     inject_release: Option<Pos2>,
     accent: Color32,
@@ -763,6 +767,7 @@ impl App {
             paths.push(PathBuf::new()); // Giriş
             active = 0;
         }
+        let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
         let tabs = paths.into_iter().map(|p| Tab::new(p, &ctx)).collect();
 
         let app = App {
@@ -802,8 +807,10 @@ impl App {
             hwnd: None,
             renaming: None,
             undo: vec![],
-            tree_cache: HashMap::new(),
-            child_cache: HashMap::new(),
+            subdirs: HashMap::new(),
+            subdirs_pending: Default::default(),
+            subdirs_tx,
+            subdirs_rx,
             grid_cols: 1,
             inject_release: None,
             accent,
@@ -1293,11 +1300,10 @@ impl App {
             Action::Back => self.tab().go_back(&ctx),
             Action::Forward => self.tab().go_forward(&ctx),
             Action::Refresh => {
-                self.tree_cache.clear();
-                self.child_cache.clear();
+                self.subdirs.clear();
                 let t = self.tab();
                 if t.search.is_none() {
-                    t.free_space = win::disk_space(&t.path);
+                    t.refresh_free_space(&ctx);
                     t.load(false, &ctx);
                 }
                 self.refresh_drives();
@@ -1508,9 +1514,30 @@ fn path_label(p: &Path) -> String {
 }
 
 impl App {
-    fn subdirs_cached(&mut self, dir: &Path) -> Vec<PathBuf> {
-        let hidden = self.show_hidden;
-        self.child_cache.entry(dir.to_path_buf()).or_insert_with(|| list_subdirs(dir, hidden)).clone()
+    /// Alt klasörler; henüz okunmadıysa okumayı başlatır ve şimdilik boş döner
+    fn subdirs_cached(&mut self, dir: &Path) -> Arc<[PathBuf]> {
+        if let Some(v) = self.subdirs.get(dir) {
+            return v.clone();
+        }
+        if self.subdirs_pending.insert(dir.to_path_buf()) {
+            let (dir, hidden, tx, ctx) = (dir.to_path_buf(), self.show_hidden, self.subdirs_tx.clone(), self.ctx.clone());
+            std::thread::spawn(move || {
+                let v = list_subdirs(&dir, hidden);
+                let _ = tx.send((dir, hidden, v));
+                ctx.request_repaint();
+            });
+        }
+        Arc::from([])
+    }
+
+    fn poll_subdirs(&mut self) {
+        while let Ok((dir, hidden, v)) = self.subdirs_rx.try_recv() {
+            self.subdirs_pending.remove(&dir);
+            // Gizli öğe ayarı bu arada değiştiyse sonuç eskidir; bir sonraki istekte yeniden okunur
+            if hidden == self.show_hidden {
+                self.subdirs.insert(dir, v.into());
+            }
+        }
     }
 
     /// Explorer'ın gösterdiği ad: Giriş, Bu bilgisayar, sürücü etiketi, bilinen klasör adı ya da klasör adı
@@ -1784,10 +1811,7 @@ impl App {
         if p.as_os_str() == THIS_PC {
             return self.drives.lock().unwrap().iter().map(|d| (d.root.clone(), d.label.clone())).collect();
         }
-        self.subdirs_cached(p).into_iter().map(|s| {
-            let n = path_label(&s);
-            (s, n)
-        }).collect()
+        self.subdirs_cached(p).iter().map(|s| (s.clone(), path_label(s))).collect()
     }
 
     fn address_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -1834,7 +1858,7 @@ impl App {
             };
             if field.has_focus() && !dir.as_os_str().is_empty() && dir.is_dir() {
                 let subs = self.subdirs_cached(&dir);
-                let matches: Vec<PathBuf> = subs.into_iter().filter(|p| path_label(p).to_lowercase().starts_with(&prefix)).take(12).collect();
+                let matches: Vec<PathBuf> = subs.iter().filter(|p| path_label(p).to_lowercase().starts_with(&prefix)).take(12).cloned().collect();
                 if !matches.is_empty() && !(matches.len() == 1 && path_label(&matches[0]).to_lowercase() == prefix) {
                     if ui.input_mut(|i| shortcut(i, Modifiers::NONE, Key::Tab)) {
                         let full = format!("{}{}", matches[0].display(), std::path::MAIN_SEPARATOR);
@@ -2094,8 +2118,7 @@ impl App {
                 ui.separator();
                 ui.checkbox(&mut self.show_preview, crate::i18n::t("Ayrıntılar bölmesi (Alt+P)"));
                 if ui.checkbox(&mut self.show_hidden, crate::i18n::t("Gizli öğeler (Ctrl+H)")).changed() {
-                    self.child_cache.clear();
-                    self.tree_cache.clear();
+                    self.subdirs.clear();
                     self.mark_views_dirty();
                 }
                 ui.checkbox(&mut self.show_ext, crate::i18n::t("Dosya adı uzantıları"));
@@ -2274,8 +2297,7 @@ impl App {
             }
         });
         if open {
-            let hidden = self.show_hidden;
-            let children = self.tree_cache.entry(path.to_path_buf()).or_insert_with(|| list_subdirs(path, hidden)).clone();
+            let children = self.subdirs_cached(path);
             for c in children.iter().take(2000) {
                 let l = path_label(c);
                 self.tree_node(ui, depth + 1, c, &l, actions);
@@ -3747,6 +3769,7 @@ impl eframe::App for App {
         let mut actions = Vec::new();
         self.images.poll(ctx);
 
+        self.poll_subdirs();
         for t in &mut self.tabs {
             t.poll(ctx);
         }
