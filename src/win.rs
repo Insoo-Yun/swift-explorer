@@ -125,8 +125,9 @@ pub fn open_terminal(dir: &Path) {
     }
 }
 
-/// Adres çubuğuna yazılınca o klasörde açılan terminaller (Explorer'daki gibi)
-const TERMINALS: [&str; 4] = ["cmd", "powershell", "pwsh", "wt"];
+/// Adres çubuğuna yazılınca o klasörde açılan terminaller (Explorer'daki gibi);
+/// "terminal" Windows Terminal'i, yoksa PowerShell'i açar
+const TERMINALS: [&str; 5] = ["terminal", "cmd", "powershell", "pwsh", "wt"];
 
 pub fn is_terminal(name: &str) -> bool {
     let name = name.to_lowercase();
@@ -135,6 +136,10 @@ pub fn is_terminal(name: &str) -> bool {
 
 /// `name` terminalini `dir` klasöründe, varsa `args` ile başlatır
 pub fn run_terminal(name: &str, args: &str, dir: &Path) -> bool {
+    if name.eq_ignore_ascii_case("terminal") {
+        open_terminal(dir);
+        return true;
+    }
     let mut cmd = Command::new(name);
     if name.to_lowercase().starts_with("wt") {
         cmd.arg("-d").arg(dir).creation_flags(CREATE_NO_WINDOW);
