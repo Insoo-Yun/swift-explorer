@@ -125,6 +125,28 @@ pub fn open_terminal(dir: &Path) {
     }
 }
 
+/// Adres çubuğuna yazılınca o klasörde açılan terminaller (Explorer'daki gibi)
+const TERMINALS: [&str; 4] = ["cmd", "powershell", "pwsh", "wt"];
+
+pub fn is_terminal(name: &str) -> bool {
+    let name = name.to_lowercase();
+    TERMINALS.contains(&name.strip_suffix(".exe").unwrap_or(&name))
+}
+
+/// `name` terminalini `dir` klasöründe, varsa `args` ile başlatır
+pub fn run_terminal(name: &str, args: &str, dir: &Path) -> bool {
+    let mut cmd = Command::new(name);
+    if name.to_lowercase().starts_with("wt") {
+        cmd.arg("-d").arg(dir).creation_flags(CREATE_NO_WINDOW);
+    } else {
+        cmd.current_dir(dir).creation_flags(CREATE_NEW_CONSOLE);
+    }
+    if !args.is_empty() {
+        cmd.raw_arg(args);
+    }
+    cmd.spawn().is_ok()
+}
+
 /// egui, panoda metin yoksa Ctrl+V için hiç olay üretmiyor; bu yüzden tuşu doğrudan soruyoruz.
 pub fn ctrl_v_down() -> bool {
     unsafe {

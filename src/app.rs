@@ -180,6 +180,7 @@ enum Action {
     InvertSelection,
     CopyPath,
     Terminal(PathBuf),
+    RunTerminal { name: String, args: String, dir: PathBuf },
     Properties(PathBuf),
     ShowInExplorer(PathBuf),
     OpenWith(PathBuf),
@@ -1524,7 +1525,14 @@ impl App {
                 ctx.copy_text(text);
                 self.toast(crate::i18n::t("Yol panoya kopyalandı"), false);
             }
-            Action::Terminal(p) => win::open_terminal(&p),
+            Action::Terminal(p) => {
+                win::open_terminal(&p);
+            }
+            Action::RunTerminal { name, args, dir } => {
+                if !win::run_terminal(&name, &args, &dir) {
+                    self.toast(crate::i18n::tf("{} başlatılamadı", &[&name]), true);
+                }
+            }
             Action::Properties(p) => win::show_properties(&p),
             Action::ShowInExplorer(p) => win::show_in_explorer(&p),
             Action::OpenWith(p) => win::open_with(&p),
@@ -1932,6 +1940,7 @@ impl App {
 
         if self.address_edit.is_some() {
             let mut navigate_to: Option<PathBuf> = None;
+            let mut entered: Option<String> = None;
             let mut close = false;
             let out = frame.show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -1949,7 +1958,7 @@ impl App {
                     }
                     if out.response.lost_focus() {
                         if ui.input(|i| i.key_pressed(Key::Enter)) {
-                            navigate_to = Some(expand_path(text.trim().trim_matches('"')));
+                            entered = Some(text.trim().trim_matches('"').to_string());
                         }
                         close = true;
                     }
@@ -1958,6 +1967,16 @@ impl App {
                 .inner
             });
             let field = out.inner;
+            if let Some(s) = entered {
+                // "cmd", "powershell", "terminal"…: aynı adda bir alt klasör yoksa o klasörde terminal aç
+                let dir = if self.tab().is_home() { dirs::home_dir().unwrap_or_default() } else { self.tab().path.clone() };
+                let (name, args) = s.split_once(char::is_whitespace).map_or((s.as_str(), ""), |(n, a)| (n, a.trim()));
+                if win::is_terminal(name) && !dir.join(&s).is_dir() {
+                    actions.push(Action::RunTerminal { name: name.to_string(), args: args.to_string(), dir });
+                } else {
+                    navigate_to = Some(expand_path(&s));
+                }
+            }
 
             // Otomatik tamamlama: yazılan yolun alt klasörleri
             let text = self.address_edit.clone().unwrap_or_default();

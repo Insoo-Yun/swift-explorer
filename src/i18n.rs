@@ -185,6 +185,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Seçimi tersine çevir", "Invert selection"),
     ("Geri al                   Ctrl+Z", "Undo                   Ctrl+Z"),
     ("Terminalde aç", "Open in Terminal"),
+    ("{} başlatılamadı", "Couldn't start {}"),
     ("Klasör boyutlarını hesapla", "Calculate folder sizes"),
     ("Hızlı erişime sabitle   Ctrl+D", "Pin to Quick access   Ctrl+D"),
     ("Explorer'da aç", "Open in File Explorer"),

@@ -120,17 +120,25 @@ pub fn show_in_explorer(path: &Path) {
     }
 }
 
-pub fn open_terminal(dir: &Path) {
+const TERMINALS: [&str; 11] = ["x-terminal-emulator", "gnome-terminal", "kgx", "ptyxis", "konsole", "xfce4-terminal", "kitty", "alacritty", "foot", "wezterm", "xterm"];
+
+pub fn open_terminal(dir: &Path) -> bool {
     let mut candidates: Vec<String> = std::env::var("TERMINAL").into_iter().collect();
-    candidates.extend(
-        ["x-terminal-emulator", "gnome-terminal", "kgx", "ptyxis", "konsole", "xfce4-terminal", "kitty", "alacritty", "foot", "wezterm", "xterm"]
-            .map(String::from),
-    );
-    for c in candidates {
-        if Command::new(&c).current_dir(dir).spawn().is_ok() {
-            return;
-        }
+    candidates.extend(TERMINALS.map(String::from));
+    candidates.iter().any(|c| Command::new(c).current_dir(dir).spawn().is_ok())
+}
+
+/// Adres çubuğuna yazılınca o klasörde açılan terminaller: "terminal" varsayılanı açar
+pub fn is_terminal(name: &str) -> bool {
+    name == "terminal" || TERMINALS.contains(&name) || std::env::var("TERMINAL").is_ok_and(|t| t == name)
+}
+
+/// `name` terminalini `dir` klasöründe, varsa `args` ile başlatır
+pub fn run_terminal(name: &str, args: &str, dir: &Path) -> bool {
+    if name == "terminal" {
+        return open_terminal(dir);
     }
+    Command::new(name).args(args.split_whitespace()).current_dir(dir).spawn().is_ok()
 }
 
 /// Windows'ta tuş doğrudan sorulur; burada Ctrl+V egui'nin yapıştırma olayından gelir.
