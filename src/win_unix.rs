@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone)]
 pub struct DriveInfo {
@@ -120,12 +120,47 @@ pub fn show_in_explorer(path: &Path) {
     }
 }
 
+/// Flatpak sandbox'ında mı: host'taki programlar orada doğrudan görünmez
+fn in_flatpak() -> bool {
+    static FLATPAK: OnceLock<bool> = OnceLock::new();
+    *FLATPAK.get_or_init(|| Path::new("/.flatpak-info").exists())
+}
+
+/// Host'taki bir programı çalıştıran komut; Flatpak içinde `flatpak-spawn --host` üzerinden
+pub fn host_command(program: &str) -> Command {
+    host_command_in(program, None)
+}
+
+fn host_command_in(program: &str, dir: Option<&Path>) -> Command {
+    if in_flatpak() {
+        let mut c = Command::new("flatpak-spawn");
+        c.arg("--host");
+        if let Some(d) = dir {
+            c.arg(format!("--directory={}", d.display()));
+        }
+        c.arg(program);
+        c
+    } else {
+        let mut c = Command::new(program);
+        if let Some(d) = dir {
+            c.current_dir(d);
+        }
+        c
+    }
+}
+
+/// Program host'ta var mı. Flatpak dışında bunu `spawn` hatası zaten söyler; içinde
+/// `flatpak-spawn` her zaman başlar, bu yüzden önce sorulur.
+fn host_has(program: &str) -> bool {
+    !in_flatpak() || host_command("sh").args(["-c", "command -v \"$1\" >/dev/null", "sh", program]).status().is_ok_and(|s| s.success())
+}
+
 const TERMINALS: [&str; 11] = ["x-terminal-emulator", "gnome-terminal", "kgx", "ptyxis", "konsole", "xfce4-terminal", "kitty", "alacritty", "foot", "wezterm", "xterm"];
 
 pub fn open_terminal(dir: &Path) -> bool {
     let mut candidates: Vec<String> = std::env::var("TERMINAL").into_iter().collect();
     candidates.extend(TERMINALS.map(String::from));
-    candidates.iter().any(|c| Command::new(c).current_dir(dir).spawn().is_ok())
+    candidates.iter().any(|c| host_has(c) && host_command_in(c, Some(dir)).spawn().is_ok())
 }
 
 /// Adres çubuğuna yazılınca o klasörde açılan terminaller: "terminal" varsayılanı açar
@@ -138,7 +173,7 @@ pub fn run_terminal(name: &str, args: &str, dir: &Path) -> bool {
     if name == "terminal" {
         return open_terminal(dir);
     }
-    Command::new(name).args(args.split_whitespace()).current_dir(dir).spawn().is_ok()
+    host_has(name) && host_command_in(name, Some(dir)).args(args.split_whitespace()).spawn().is_ok()
 }
 
 /// Windows'ta tuş doğrudan sorulur; burada Ctrl+V egui'nin yapıştırma olayından gelir.
