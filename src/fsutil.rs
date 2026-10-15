@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+const ATTR_READONLY: u32 = 0x1;
 const ATTR_HIDDEN: u32 = 0x2;
 const ATTR_SYSTEM: u32 = 0x4;
 pub const ATTR_DIR: u32 = 0x10;
@@ -59,6 +60,10 @@ pub struct Entry {
     pub modified: Option<SystemTime>,
     pub hidden: bool,
     pub ext: String,
+    /// Sıradan klasör: ikonu standart klasör ikonudur, tüm bu klasörler tek ikonu paylaşır.
+    /// Windows klasöre özel ikonu (desktop.ini) yalnızca salt okunur ya da sistem
+    /// özniteliği varsa uygular; bağlantı noktaları da ayrı tutulur.
+    pub plain_dir: bool,
 }
 
 impl Entry {
@@ -83,6 +88,7 @@ impl Entry {
             modified: md.modified().ok(),
             hidden: is_hidden_attr(attrs),
             ext,
+            plain_dir: cfg!(windows) && is_dir && attrs & (ATTR_READONLY | ATTR_SYSTEM | ATTR_REPARSE) == 0,
         }
     }
 }

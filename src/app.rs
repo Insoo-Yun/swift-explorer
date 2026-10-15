@@ -564,7 +564,7 @@ fn glyph_job(ui: &egui::Ui, glyph: &str, glyph_color: Option<Color32>, text: &st
 /// Sistem ikonunu verilen dikdörtgene çizer (alan ayırmadan)
 fn draw_icon(painter: &egui::Painter, images: &mut ImageCache, path: &Path, is_dir: bool, ext: &str, rect: Rect) {
     let px = icon_px(painter.ctx(), rect.width());
-    let key = icon_key(path, is_dir, ext, px);
+    let key = icon_key(path, is_dir, ext, px, false);
     match images.get(&key, path, px, true) {
         Img::Ready(tex) => {
             painter.image(tex.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
@@ -641,8 +641,10 @@ fn per_path_icon(ext: &str) -> bool {
 }
 
 /// Küçük ikon için önbellek anahtarı + kaynak yol
-fn icon_key(path: &Path, is_dir: bool, ext: &str, px: i32) -> String {
-    if is_dir || ext.is_empty() || per_path_icon(ext) {
+fn icon_key(path: &Path, is_dir: bool, ext: &str, px: i32, plain_dir: bool) -> String {
+    if plain_dir {
+        format!("i{px}:<klasör>")
+    } else if is_dir || ext.is_empty() || per_path_icon(ext) {
         format!("i{px}:{}", path.display())
     } else {
         format!("i{px}:.{ext}")
@@ -673,9 +675,9 @@ fn paint_fallback(painter: &egui::Painter, rect: Rect, is_dir: bool) {
 }
 
 /// Ekrana sistem ikonunu ya da (yüklenemezse) sade bir yedek simge çizer.
-fn paint_icon(ui: &mut egui::Ui, images: &mut ImageCache, path: &Path, is_dir: bool, ext: &str, size: f32, fallback: &str) -> egui::Response {
+fn paint_icon(ui: &mut egui::Ui, images: &mut ImageCache, path: &Path, is_dir: bool, ext: &str, plain_dir: bool, size: f32, fallback: &str) -> egui::Response {
     let px = icon_px(ui.ctx(), size);
-    let key = icon_key(path, is_dir, ext, px);
+    let key = icon_key(path, is_dir, ext, px, plain_dir);
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     match images.get(&key, path, px, true) {
         Img::Ready(tex) => {
@@ -1986,7 +1988,7 @@ impl App {
                         for (s, label) in items.iter().take(500) {
                             let r = ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
-                                paint_icon(ui, &mut self.images, &Self::loc_icon(s), true, "", 16.0, "📁");
+                                paint_icon(ui, &mut self.images, &Self::loc_icon(s), true, "", false, 16.0, "📁");
                                 ui.add(egui::Button::new(label.as_str()).frame(false))
                             }).inner;
                             if r.clicked() {
@@ -3042,7 +3044,7 @@ impl App {
                     };
                     row.col(|ui| {
                         ui.add_space(4.0);
-                        let resp = paint_icon(ui, images, &e.path, e.is_dir, &e.ext, 18.0, fsutil::icon(&e));
+                        let resp = paint_icon(ui, images, &e.path, e.is_dir, &e.ext, e.plain_dir, 18.0, fsutil::icon(&e));
                         if dim {
                             ui.painter().rect_filled(resp.rect, 0.0, ui.visuals().extreme_bg_color.gamma_multiply(0.5));
                         }
@@ -3235,7 +3237,7 @@ impl App {
                         // Görsel
                         let img_rect = Rect::from_min_size(rect.min + egui::vec2((tile_w - size) / 2.0, 8.0), Vec2::splat(size));
                         let thumb = !e.is_dir && fsutil::has_thumbnail(&e.ext);
-                        let (key, icon_only) = if thumb { (format!("t{px}:{}", e.path.display()), false) } else { (icon_key(&e.path, e.is_dir, &e.ext, px), true) };
+                        let (key, icon_only) = if thumb { (format!("t{px}:{}", e.path.display()), false) } else { (icon_key(&e.path, e.is_dir, &e.ext, px, e.plain_dir), true) };
                         let dim = e.hidden || cut_set.contains(&e.path);
                         let tint = if dim { Color32::from_white_alpha(130) } else { Color32::WHITE };
                         match images.get(&key, &e.path, px, icon_only) {
@@ -3345,9 +3347,9 @@ impl App {
             };
             let ctx = ui.ctx().clone();
             let px = icon_px(&ctx, 200.0);
-            let (is_dir, ext) = entry.as_ref().map(|e| (e.is_dir, e.ext.clone())).unwrap_or((true, String::new()));
+            let (is_dir, ext, plain) = entry.as_ref().map(|e| (e.is_dir, e.ext.clone(), e.plain_dir)).unwrap_or((true, String::new(), false));
             let thumb = !is_dir && fsutil::has_thumbnail(&ext);
-            let key = if thumb { format!("t{px}:{}", path.display()) } else { icon_key(&path, is_dir, &ext, px) };
+            let key = if thumb { format!("t{px}:{}", path.display()) } else { icon_key(&path, is_dir, &ext, px, plain) };
             ui.vertical_centered(|ui| {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(260.0), 200.0), Sense::hover());
                 if let Img::Ready(tex) = self.images.get(&key, &path, px, !thumb) {

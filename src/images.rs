@@ -20,13 +20,27 @@ struct Req {
     icon_only: bool,
 }
 
+/// Önbellekteki görüntülerin toplam piksel belleği (GPU/paylaşımlı bellek) üst sınırı.
+/// Aşılınca en uzun süredir çizilmeyenler bırakılır; ekrandakiler hiç atılmaz.
+const BUDGET_BYTES: usize = 160 << 20;
+
+struct Slot {
+    img: Img,
+    /// En son istendiği kare
+    used: u64,
+}
+
 /// Arka plan iş parçacıklarında ikon/küçük resim üretip doku olarak önbelleğe alır.
 /// İstekler LIFO işlenir: hızlı kaydırmada ekrandaki öğeler önce gelir.
+/// Piksel olarak aynı görüntüler (ör. binlerce standart klasör ikonu) tek dokuyu paylaşır.
 pub struct ImageCache {
-    textures: HashMap<String, Img>,
+    textures: HashMap<String, Slot>,
+    /// İçerik özeti → doku ve bayt boyutu
+    unique: HashMap<u64, (egui::TextureHandle, usize)>,
+    unique_bytes: usize,
+    frame: u64,
     queue: Arc<(Mutex<Vec<Req>>, Condvar)>,
     rx: Receiver<(String, Option<egui::ColorImage>)>,
-    thumbs: usize,
 }
 
 impl ImageCache {
@@ -71,14 +85,15 @@ impl ImageCache {
                 }
             });
         }
-        ImageCache { textures: HashMap::new(), queue, rx, thumbs: 0 }
+        ImageCache { textures: HashMap::new(), unique: HashMap::new(), unique_bytes: 0, frame: 0, queue, rx }
     }
 
     pub fn get(&mut self, key: &str, path: &Path, size: i32, icon_only: bool) -> Img {
-        if let Some(t) = self.textures.get(key) {
-            return t.clone();
+        if let Some(t) = self.textures.get_mut(key) {
+            t.used = self.frame;
+            return t.img.clone();
         }
-        self.textures.insert(key.to_string(), Img::Pending);
+        self.textures.insert(key.to_string(), Slot { img: Img::Pending, used: self.frame });
         let (m, cv) = &*self.queue;
         m.lock().unwrap().push(Req { key: key.to_string(), path: path.to_path_buf(), size, icon_only });
         cv.notify_one();
@@ -94,20 +109,65 @@ impl ImageCache {
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
+        self.frame += 1;
         while let Ok((key, img)) = self.rx.try_recv() {
-            if !key.starts_with('i') {
-                self.thumbs += 1;
-            }
-            let tex = match img {
-                Some(i) => Img::Ready(ctx.load_texture(&key, i, egui::TextureOptions::LINEAR)),
+            let img = match img {
+                Some(i) => Img::Ready(self.texture_for(ctx, &key, i)),
                 None => Img::Failed,
             };
-            self.textures.insert(key, tex);
+            self.textures.insert(key, Slot { img, used: self.frame });
         }
-        // Bellek sınırı: çok fazla küçük resim birikirse onları bırak (ikonlar kalır)
-        if self.thumbs > 2500 {
-            self.textures.retain(|k, _| k.starts_with('i'));
-            self.thumbs = 0;
+        if self.unique_bytes > BUDGET_BYTES {
+            self.evict();
         }
+    }
+
+    /// Aynı piksellere sahip bir doku varsa onu paylaşır, yoksa yükler
+    fn texture_for(&mut self, ctx: &egui::Context, key: &str, img: egui::ColorImage) -> egui::TextureHandle {
+        use std::hash::{BuildHasher, Hash, Hasher};
+        let mut h = egui::ahash::RandomState::with_seeds(1, 2, 3, 4).build_hasher();
+        img.size.hash(&mut h);
+        img.as_raw().hash(&mut h);
+        let digest = h.finish();
+        if let Some((tex, _)) = self.unique.get(&digest) {
+            return tex.clone();
+        }
+        let bytes = img.pixels.len() * 4;
+        let tex = ctx.load_texture(key, img, egui::TextureOptions::LINEAR);
+        self.unique.insert(digest, (tex.clone(), bytes));
+        self.unique_bytes += bytes;
+        tex
+    }
+
+    /// En uzun süredir çizilmeyenleri bütçenin %75'ine inene dek bırakır
+    fn evict(&mut self) {
+        let mut order: Vec<(u64, String)> =
+            self.textures.iter().filter(|(_, s)| s.used < self.frame.saturating_sub(1) && !matches!(s.img, Img::Pending)).map(|(k, s)| (s.used, k.clone())).collect();
+        order.sort_unstable();
+        let target = BUDGET_BYTES / 4 * 3;
+        for chunk in order.chunks(64) {
+            for (_, k) in chunk {
+                self.textures.remove(k);
+            }
+            self.prune_unique();
+            if self.unique_bytes <= target {
+                break;
+            }
+        }
+    }
+
+    /// Artık hiçbir anahtarın göstermediği dokuları bırakır
+    fn prune_unique(&mut self) {
+        let live: std::collections::HashSet<egui::TextureId> =
+            self.textures.values().filter_map(|s| if let Img::Ready(t) = &s.img { Some(t.id()) } else { None }).collect();
+        let mut freed = 0;
+        self.unique.retain(|_, (t, b)| {
+            let keep = live.contains(&t.id());
+            if !keep {
+                freed += *b;
+            }
+            keep
+        });
+        self.unique_bytes -= freed;
     }
 }
