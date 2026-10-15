@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.misutesu_desu.SwiftExplorer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Swift Explorer</name>
+  <summary>File manager in the style of the Windows 11 File Explorer</summary>
+  <developer id="io.github.misutesu_desu">
+    <name>misutesu-desu</name>
+  </developer>
+  <description>
+    <p>
+      Swift Explorer looks and behaves like the Windows 11 File Explorer: tabs in the title bar,
+      an address bar with breadcrumbs, a navigation pane and the same keyboard shortcuts.
+    </p>
+    <p>
+      Folders are read on background threads, so large ones open without freezing the window,
+      and search runs across subfolders in parallel.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.misutesu_desu.SwiftExplorer.desktop</launchable>
+  <url type="homepage">https://github.com/misutesu-desu/swift-explorer</url>
+  <url type="bugtracker">https://github.com/misutesu-desu/swift-explorer/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Large icons, grouped by date</caption>
+      <image>https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/docs/large-icons.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Details view</caption>
+      <image>https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/docs/details.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Light theme</caption>
+      <image>https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/docs/light.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <releases>
+    <release version="0.2.0" date="2026-10-15">
+      <description>
+        <p>First Linux build.</p>
+      </description>
+    </release>
+  </releases>
+</component>
