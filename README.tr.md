@@ -10,7 +10,15 @@ Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazıl
 
 `SwiftExplorer.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
 
-Linux'ta `swift-explorer-linux-x86_64.tar.gz` dosyasını indirin, arşivden çıkarın ve içindeki `swift-explorer` dosyasını açın.
+Linux'ta kendi kullanıcınız için şu komutla kurabilirsiniz:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/install.sh | sh
+```
+
+`swift-explorer` dosyası `~/.local/bin` klasörüne kopyalanır ve uygulama menüsüne eklenir. Kaldırmak için aynı komutta `sh`'den sonra `-s -- --uninstall` yazın. Kurmadan denemek isterseniz `swift-explorer-linux-x86_64.tar.gz` dosyasını indirip içindeki `swift-explorer`'ı açabilirsiniz.
+
+0.2.0'dan sonraki sürümlerde `swift-explorer.flatpak` da var: `flatpak install --user swift-explorer.flatpak` ile kurulur.
 
 ## Neler var
 
@@ -18,6 +26,7 @@ Linux'ta `swift-explorer-linux-x86_64.tar.gz` dosyasını indirin, arşivden ç�
 - Windows'un kendi ikonları, küçük resimleri ve tür adları kullanılır.
 - Explorer'daki kısayolların hepsi aynı çalışır. F1 tam listeyi gösterir.
 - Arama kutusuna yazdıkça bulunduğunuz klasör filtrelenir. Enter'a basınca tüm alt klasörlerde arar; `*` ve `?` joker karakterleri çalışır.
+- Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
 - Shift + sağ tık Windows'un tam sağ tık menüsünü açar; 7-Zip, WinRAR ve Gönder orada.
 - Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.

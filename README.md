@@ -10,7 +10,15 @@ A file manager for Windows and Linux that looks and behaves like the Windows 11 
 
 Get `SwiftExplorer.exe` from the [Releases](../../releases) page. It is a single file with no installer. Made for Windows 11; Windows 10 should work but hasn't been tested.
 
-On Linux, download `swift-explorer-linux-x86_64.tar.gz`, extract it and run `swift-explorer`.
+On Linux, install it for your user with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/install.sh | sh
+```
+
+This puts `swift-explorer` in `~/.local/bin` and adds it to the app menu. To remove it, run the same command with `-s -- --uninstall` after `sh`. You can also download `swift-explorer-linux-x86_64.tar.gz` and run `swift-explorer` from it without installing.
+
+Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with `flatpak install --user swift-explorer.flatpak`.
 
 ## What it does
 
@@ -18,6 +26,7 @@ On Linux, download `swift-explorer-linux-x86_64.tar.gz`, extract it and run `swi
 - Uses Windows' own icons, thumbnails and file type names.
 - Every Explorer shortcut works the same way. Press F1 for the full list.
 - Typing in the search box filters the current folder instantly. Press Enter to search all subfolders; `*` and `?` wildcards work.
+- Typing `cmd`, `powershell`, `pwsh` or `wt` in the address bar opens that terminal in the current folder. On Linux, `terminal` opens your default terminal, and a terminal's name (`konsole`, `kitty`…) opens that one.
 - Copy, cut, paste and drag and drop work in both directions with Explorer and the desktop.
 - Shift + right-click opens the full Windows context menu, so 7-Zip, WinRAR and Send to are there.
 - Ctrl+Z undoes renames, moves, copies and deletes to the Recycle Bin.
