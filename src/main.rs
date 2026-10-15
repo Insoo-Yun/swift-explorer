@@ -13,6 +13,8 @@ mod win;
 use std::path::PathBuf;
 
 pub const APP_NAME: &str = "Swift Explorer";
+/// Wayland/X11 pencere kimliği; `.desktop` dosyasının adıyla aynı olmalı ki masaüstü ikonu ve adı eşleştirsin
+pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
 fn main() -> eframe::Result<()> {
     let start = std::env::args().nth(1).map(PathBuf::from);
@@ -22,6 +24,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_maximized(first_run)
             .with_title(APP_NAME)
+            .with_app_id(APP_ID)
             // Başlık çubuğu yok: sekmeler ve pencere düğmeleri Explorer gibi en üstte
             .with_decorations(false)
             .with_inner_size([1060.0, 640.0])
