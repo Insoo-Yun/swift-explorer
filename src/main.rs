@@ -24,7 +24,8 @@ fn main() -> eframe::Result<()> {
             .with_decorations(false)
             .with_inner_size([1060.0, 640.0])
             .with_min_inner_size([640.0, 400.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()),
         ..Default::default()
     };
     eframe::run_native("Swift Explorer", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, start)))))
