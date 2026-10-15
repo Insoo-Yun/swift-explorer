@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Windows'un kendi ikonları, küçük resimleri ve tür adları kullanılır.
 - Explorer'daki kısayolların hepsi aynı çalışır. F1 tam listeyi gösterir.
 - Arama kutusuna yazdıkça bulunduğunuz klasör filtrelenir. Enter'a basınca tüm alt klasörlerde arar; `*` ve `?` joker karakterleri çalışır.
-- Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
+- Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır, `terminal` ise Windows Terminal'i açar. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
 - Shift + sağ tık Windows'un tam sağ tık menüsünü açar; 7-Zip, WinRAR ve Gönder orada.
 - Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.
