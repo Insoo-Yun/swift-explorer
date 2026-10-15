@@ -1,0 +1,42 @@
+id: io.github.misutesu_desu.SwiftExplorer
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: swift-explorer
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # A file manager needs to see the whole file system
+  - --filesystem=host
+  # Properties and "Show in file manager" go through the host file manager
+  - --talk-name=org.freedesktop.FileManager1
+  # "Open in Terminal" starts the host's terminal with flatpak-spawn --host
+  - --talk-name=org.freedesktop.Flatpak
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/swift-explorer/cargo
+modules:
+  - name: swift-explorer
+    buildsystem: simple
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      - cargo --offline build --release --verbose
+      - install -Dm755 target/release/swift-explorer /app/bin/swift-explorer
+      - install -Dm644 packaging/linux/io.github.misutesu_desu.SwiftExplorer.desktop /app/share/applications/io.github.misutesu_desu.SwiftExplorer.desktop
+      - install -Dm644 packaging/linux/io.github.misutesu_desu.SwiftExplorer.metainfo.xml /app/share/metainfo/io.github.misutesu_desu.SwiftExplorer.metainfo.xml
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.misutesu_desu.SwiftExplorer.png
+    sources:
+      # Flathub builds from a tagged git source instead; see packaging/flatpak/README.md
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - build-dir
+          - .flatpak-builder
+      # Generated from Cargo.lock by flatpak-cargo-generator (done in CI)
+      - cargo-sources.json
