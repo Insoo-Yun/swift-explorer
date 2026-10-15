@@ -2,13 +2,15 @@
 
 [Türkçe](README.tr.md)
 
-A file manager for Windows that looks and behaves like the Windows 11 File Explorer, written in Rust. Folders are read on background threads, so large ones open without freezing the window, and search runs across subfolders in parallel.
+A file manager for Windows and Linux that looks and behaves like the Windows 11 File Explorer, written in Rust. Folders are read on background threads, so large ones open without freezing the window, and search runs across subfolders in parallel.
 
 ![Large icons, grouped by date](docs/large-icons.png)
 
 ## Download
 
 Get `SwiftExplorer.exe` from the [Releases](../../releases) page. It is a single file with no installer. Made for Windows 11; Windows 10 should work but hasn't been tested.
+
+On Linux, download `swift-explorer-linux-x86_64`, make it executable with `chmod +x` and run it.
 
 ## What it does
 
@@ -34,19 +36,30 @@ Get `SwiftExplorer.exe` from the [Releases](../../releases) page. It is a single
 
 The Type column and the Shift + right-click menu come from Windows, so they stay in the Windows display language even when the app is set to English.
 
+## Linux
+
+The Linux version is new and less tested than the Windows one. It keeps the same look and shortcuts, with these differences:
+
+- Icons come from your desktop's icon theme. Thumbnails are shown for PNG, JPEG, GIF, WebP and BMP.
+- There is no Windows context menu, so Shift + right-click and Shift+F10 open the app's own menu.
+- Copied files go to the clipboard as a list of paths. Pasting paths or `file://` links copied from other file managers works; pasting into other file managers may not.
+- Dragging files out of the window to other apps doesn't work yet. Dropping files into it works on X11.
+- "This PC" lists `/` and disks mounted under `/media`, `/run/media` and `/mnt`.
+- Properties and "Show in file manager" use your file manager over D-Bus (Nautilus, Dolphin, Nemo and Thunar support it).
+
 ## Building
 
-You need Rust 1.82 or newer and Windows.
+You need Rust 1.82 or newer.
 
 ```bash
 cargo build --release
 ```
 
-The executable ends up in `target/release/swift-explorer.exe`.
+The executable ends up in `target/release/swift-explorer.exe` on Windows and `target/release/swift-explorer` on Linux.
 
 ## Settings
 
-Settings are stored in `%APPDATA%\SwiftExplorer\config.json`. Setting the `SWIFT_EXPLORER_LANG` environment variable to `en` or `tr` overrides the language setting.
+Settings are stored in `%APPDATA%\SwiftExplorer\config.json` on Windows and `~/.config/SwiftExplorer/config.json` on Linux. Setting the `SWIFT_EXPLORER_LANG` environment variable to `en` or `tr` overrides the language setting.
 
 ## Known limitations
 
@@ -56,4 +69,4 @@ Settings are stored in `%APPDATA%\SwiftExplorer\config.json`. Setting the `SWIFT
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The Linux build includes a few icons from Microsoft's [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) ([MIT](assets/LICENSE-fluent-icons.txt)).

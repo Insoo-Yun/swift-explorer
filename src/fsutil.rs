@@ -4,7 +4,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -17,8 +16,38 @@ use serde::{Deserialize, Serialize};
 
 const ATTR_HIDDEN: u32 = 0x2;
 const ATTR_SYSTEM: u32 = 0x4;
-const ATTR_DIR: u32 = 0x10;
+pub const ATTR_DIR: u32 = 0x10;
 const ATTR_REPARSE: u32 = 0x400;
+
+/// Windows dosya öznitelikleri. Diğer sistemlerde aynı bitler üretilir:
+/// adı nokta ile başlayan gizli, sembolik bağlantı "reparse point" sayılır.
+#[cfg(windows)]
+pub fn attributes(_path: &Path, md: &fs::Metadata) -> u32 {
+    use std::os::windows::fs::MetadataExt;
+    md.file_attributes()
+}
+
+#[cfg(not(windows))]
+pub fn attributes(path: &Path, md: &fs::Metadata) -> u32 {
+    let mut a = 0;
+    if md.file_type().is_symlink() {
+        a |= ATTR_REPARSE;
+        if fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+            a |= ATTR_DIR;
+        }
+    } else if md.is_dir() {
+        a |= ATTR_DIR;
+    }
+    if path.file_name().is_some_and(|n| n.as_encoded_bytes().first() == Some(&b'.')) {
+        a |= ATTR_HIDDEN;
+    }
+    a
+}
+
+/// Gizli ya da sistem dosyası
+pub fn is_hidden_attr(a: u32) -> bool {
+    a & (ATTR_HIDDEN | ATTR_SYSTEM) != 0
+}
 
 #[derive(Clone)]
 pub struct Entry {
@@ -38,7 +67,7 @@ impl Entry {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        let attrs = md.file_attributes();
+        let attrs = attributes(&path, md);
         let is_dir = attrs & ATTR_DIR != 0;
         let ext = if is_dir {
             String::new()
@@ -52,7 +81,7 @@ impl Entry {
             is_dir,
             size: if is_dir { 0 } else { md.len() },
             modified: md.modified().ok(),
-            hidden: attrs & (ATTR_HIDDEN | ATTR_SYSTEM) != 0,
+            hidden: is_hidden_attr(attrs),
             ext,
         }
     }
@@ -350,8 +379,8 @@ fn search_dir(dir: &Path, pat: &Pattern, tx: &Sender<SearchMsg>, cancel: &Atomic
     let mut subdirs = Vec::new();
     for de in rd.flatten() {
         let Ok(md) = de.metadata() else { continue };
-        let attrs = md.file_attributes();
         let path = de.path();
+        let attrs = attributes(&path, &md);
         if attrs & ATTR_DIR != 0 && attrs & ATTR_REPARSE == 0 {
             subdirs.push(path.clone());
         }
@@ -378,7 +407,7 @@ pub fn dir_size(dir: &Path, cancel: &AtomicBool) -> u64 {
     let mut subdirs = Vec::new();
     for de in rd.flatten() {
         let Ok(md) = de.metadata() else { continue };
-        let attrs = md.file_attributes();
+        let attrs = attributes(&de.path(), &md);
         if attrs & ATTR_DIR != 0 {
             if attrs & ATTR_REPARSE == 0 {
                 subdirs.push(de.path());
@@ -491,7 +520,7 @@ fn tree_size(p: &Path, cancel: &AtomicBool) -> u64 {
 fn copy_tree(src: &Path, dst: &Path, job: &Job) -> io::Result<()> {
     job.interrupted()?;
     let md = fs::symlink_metadata(src)?;
-    let attrs = md.file_attributes();
+    let attrs = attributes(src, &md);
     if attrs & ATTR_DIR != 0 {
         if attrs & ATTR_REPARSE != 0 {
             return Ok(()); // bağlantı noktalarını izleme: sonsuz döngü riski

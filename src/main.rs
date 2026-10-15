@@ -3,8 +3,11 @@
 mod app;
 mod fsutil;
 mod i18n;
+mod images;
 mod tab;
+#[cfg_attr(not(windows), path = "shell_unix.rs")]
 mod shell;
+#[cfg_attr(not(windows), path = "win_unix.rs")]
 mod win;
 
 use std::path::PathBuf;

@@ -203,6 +203,12 @@ pub struct App {
 
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+    #[cfg(not(windows))]
+    if let Some(bytes) = linux_ui_font() {
+        fonts.font_data.insert("system".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "system".into());
+    }
+    #[cfg(windows)]
     for (name, file, front) in [("segoe", "segoeui.ttf", true), ("segoe_sym", "seguisym.ttf", false)] {
         if let Ok(bytes) = std::fs::read(format!("C:\\Windows\\Fonts\\{file}")) {
             fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
@@ -219,6 +225,12 @@ fn setup_fonts(ctx: &egui::Context) {
     icons.extend(fonts.families[&egui::FontFamily::Proportional].iter().cloned());
     // Explorer'ın kendi glifleri: Windows 11'de Segoe Fluent Icons, Windows 10'da Segoe MDL2 Assets
     let mut fluent = icons.clone();
+    #[cfg(not(windows))]
+    {
+        fonts.font_data.insert(FLUENT.into(), Arc::new(egui::FontData::from_static(include_bytes!("../assets/fluent-icons.ttf"))));
+        fluent.insert(0, FLUENT.into());
+    }
+    #[cfg(windows)]
     for file in ["SegoeIcons.ttf", "segmdl2.ttf"] {
         if let Ok(bytes) = std::fs::read(format!("C:\\Windows\\Fonts\\{file}")) {
             fonts.font_data.insert(FLUENT.into(), Arc::new(egui::FontData::from_owned(bytes)));
@@ -229,6 +241,15 @@ fn setup_fonts(ctx: &egui::Context) {
     fonts.families.insert(egui::FontFamily::Name(ICONS.into()), icons);
     fonts.families.insert(egui::FontFamily::Name(FLUENT.into()), fluent);
     ctx.set_fonts(fonts);
+}
+
+/// Masaüstünün arayüz fontu (fontconfig'in "sans-serif" seçimi)
+#[cfg(not(windows))]
+fn linux_ui_font() -> Option<Vec<u8>> {
+    let out = std::process::Command::new("fc-match").args(["-f", "%{file}", "sans-serif"]).output().ok()?;
+    let path = String::from_utf8(out.stdout).ok()?;
+    let path = path.trim();
+    (path.ends_with(".ttf") || path.ends_with(".otf")).then(|| std::fs::read(path).ok()).flatten()
 }
 
 /// Explorer'dan ölçülen renkler (Windows 11, koyu/açık)
@@ -426,6 +447,7 @@ fn caption_button(ui: &mut egui::Ui, kind: Caption) -> egui::Response {
 }
 
 /// Segoe Fluent Icons glif kodları (Explorer'ın kullandıkları)
+#[cfg(windows)]
 mod g {
     pub const BACK: &str = "\u{E72B}";
     pub const FORWARD: &str = "\u{E72A}";
@@ -456,6 +478,42 @@ mod g {
     pub const CLOSE: &str = "\u{E8BB}";
     pub const ICONS_VIEW: &str = "\u{E739}";
 }
+
+/// Fluent UI System Icons glif kodları (assets/fluent-icons.ttf, MIT)
+#[cfg(not(windows))]
+mod g {
+    pub const BACK: &str = "\u{F15B}";
+    pub const FORWARD: &str = "\u{F181}";
+    pub const UP: &str = "\u{F19B}";
+    pub const REFRESH: &str = "\u{F13D}";
+    pub const CHEVRON_RIGHT: &str = "\u{F2AF}";
+    pub const CHEVRON_DOWN: &str = "\u{F2A2}";
+    pub const PC: &str = "\u{F359}";
+    pub const SEARCH: &str = "\u{F68F}";
+    pub const NEW: &str = "\u{F10C}";
+    pub const CUT: &str = "\u{F33A}";
+    pub const COPY: &str = "\u{F32B}";
+    pub const PASTE: &str = "\u{F2D5}";
+    pub const RENAME: &str = "\u{F669}";
+    pub const LINK: &str = "\u{F4E4}";
+    pub const DELETE: &str = "\u{F34C}";
+    pub const SORT: &str = "\u{F18A}";
+    pub const LIST: &str = "\u{ECD9}";
+    pub const TILES: &str = "\u{F8CB}";
+    pub const MORE: &str = "\u{E824}";
+    pub const PANE: &str = "\u{E8BD}";
+    pub const PIN: &str = "\u{F601}";
+    pub const ADD: &str = "\u{F109}";
+    pub const CANCEL: &str = "\u{F369}";
+    pub const MIN: &str = "\u{EBD0}";
+    pub const MAX: &str = "\u{E7EB}";
+    pub const RESTORE: &str = "\u{EB96}";
+    pub const CLOSE: &str = "\u{F369}";
+    pub const ICONS_VIEW: &str = "\u{F462}";
+}
+
+/// Windows'un kendi sağ tık menüsü ve OLE sürükle-bırak yalnızca Windows'ta
+const NATIVE_MENU: bool = cfg!(windows);
 
 /// Shell ayrıştırma adları: ikonları doğrudan Windows'tan alınır
 const HOME_SHELL: &str = "::{F874310E-B6B7-47DC-BC84-B9E6B38F5903}";
@@ -646,6 +704,14 @@ fn valid_name(name: &str) -> bool {
     !n.is_empty() && !n.chars().any(|c| "\\/:*?\"<>|".contains(c)) && n != "." && n != ".."
 }
 
+#[cfg(not(windows))]
+fn same_volume(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let dev = |p: &Path| p.ancestors().find_map(|x| std::fs::metadata(x).ok()).map(|m| m.dev());
+    dev(a) == dev(b)
+}
+
+#[cfg(windows)]
 fn same_volume(a: &Path, b: &Path) -> bool {
     let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_uppercase());
     root(a) == root(b)
@@ -944,6 +1010,15 @@ impl App {
             actions.push(Action::Paste);
         }
         self.ctrl_v_prev = v;
+        // Linux: Ctrl+V pano metniyle birlikte yapıştırma olayı olarak gelir
+        #[cfg(not(windows))]
+        if !typing && matches!(self.dialog, Dialog::None) {
+            let pasted = ctx.input(|i| i.events.iter().find_map(|e| if let egui::Event::Paste(s) = e { Some(s.clone()) } else { None }));
+            if let Some(text) = pasted {
+                win::note_paste_text(&text);
+                actions.push(Action::Paste);
+            }
+        }
 
         if !matches!(self.dialog, Dialog::None) {
             return;
@@ -1059,7 +1134,7 @@ impl App {
             if shortcut(i, Modifiers::NONE, Key::F2) {
                 actions.push(Action::Rename);
             }
-            if shortcut(i, Modifiers::SHIFT, Key::F10) {
+            if NATIVE_MENU && shortcut(i, Modifiers::SHIFT, Key::F10) {
                 actions.push(Action::ShellMenu { extended: false });
             }
             if shortcut(i, Modifiers::NONE, Key::Backspace) {
@@ -1254,6 +1329,8 @@ impl App {
                     return;
                 }
                 win::clipboard_set_files(&paths, cut);
+                #[cfg(not(windows))]
+                self.ctx.copy_text(win::files_as_text(&paths));
                 let n = paths.len();
                 self.clipboard = Some((paths, cut));
                 self.toast(crate::i18n::tf("{} öğe {} — yapıştırmak için Ctrl+V", &[&n, &if cut { crate::i18n::t("kesildi") } else { crate::i18n::t("kopyalandı") }]), false);
@@ -1269,6 +1346,7 @@ impl App {
                 let (files, cut) = match (win::clipboard_get_files(), &self.clipboard) {
                     (Some((os, os_cut)), Some((mine, my_cut))) if &os == mine => (os, *my_cut || os_cut),
                     (Some((os, os_cut)), _) => (os, os_cut),
+                    (None, Some((mine, my_cut))) if !cfg!(windows) => (mine.clone(), *my_cut),
                     (None, _) => {
                         self.toast(crate::i18n::t("Panoda yapıştırılacak dosya yok"), false);
                         return;
@@ -1394,15 +1472,14 @@ impl App {
 // ================================================================ üst çubuklar, kenar çubuğu, Giriş
 
 fn list_subdirs(dir: &Path, show_hidden: bool) -> Vec<PathBuf> {
-    use std::os::windows::fs::MetadataExt;
     let Ok(rd) = std::fs::read_dir(dir) else { return vec![] };
     let mut v: Vec<(String, PathBuf)> = rd
         .flatten()
         .filter_map(|de| {
             let md = de.metadata().ok()?;
-            let a = md.file_attributes();
-            let is_dir = a & 0x10 != 0;
-            let hidden = a & 0x6 != 0;
+            let a = fsutil::attributes(&de.path(), &md);
+            let is_dir = a & fsutil::ATTR_DIR != 0;
+            let hidden = fsutil::is_hidden_attr(a);
             (is_dir && (show_hidden || !hidden)).then(|| (de.file_name().to_string_lossy().to_lowercase(), de.path()))
         })
         .collect();
@@ -1760,7 +1837,7 @@ impl App {
                 let matches: Vec<PathBuf> = subs.into_iter().filter(|p| path_label(p).to_lowercase().starts_with(&prefix)).take(12).collect();
                 if !matches.is_empty() && !(matches.len() == 1 && path_label(&matches[0]).to_lowercase() == prefix) {
                     if ui.input_mut(|i| shortcut(i, Modifiers::NONE, Key::Tab)) {
-                        let full = format!("{}\\", matches[0].display());
+                        let full = format!("{}{}", matches[0].display(), std::path::MAIN_SEPARATOR);
                         self.address_edit = Some(full.clone());
                         if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), field.id) {
                             let n = full.chars().count();
@@ -2082,8 +2159,12 @@ impl App {
                         actions.push(Action::AddBookmark(cur.clone()));
                         ui.close_menu();
                     }
-                    if ui.button(crate::i18n::t("Explorer'da aç")).clicked() {
+                    let open_label = if cfg!(windows) { "Explorer'da aç" } else { "Dosya yöneticisinde aç" };
+                    if ui.button(crate::i18n::t(open_label)).clicked() {
+                        #[cfg(windows)]
                         let _ = std::process::Command::new("explorer.exe").arg(&cur).spawn();
+                        #[cfg(not(windows))]
+                        let _ = open::that_detached(&cur);
                         ui.close_menu();
                     }
                     ui.separator();
@@ -2289,11 +2370,13 @@ impl App {
                     self.tree_node(ui, 1, &d.root, &d.label, actions);
                 }
             }
-            let (r, toggled) = self.nav_row(ui, 0, Some(false), Path::new(NETWORK_SHELL), crate::i18n::t("Ağ"), false, false);
-            if r.clicked() || toggled {
-                let _ = std::process::Command::new("explorer.exe").arg(format!("shell:{NETWORK_SHELL}")).spawn();
+            if cfg!(windows) {
+                let (r, toggled) = self.nav_row(ui, 0, Some(false), Path::new(NETWORK_SHELL), crate::i18n::t("Ağ"), false, false);
+                if r.clicked() || toggled {
+                    let _ = std::process::Command::new("explorer.exe").arg(format!("shell:{NETWORK_SHELL}")).spawn();
+                }
+                r.on_hover_text(crate::i18n::t("Ağ, Windows Dosya Gezgini'nde açılır"));
             }
-            r.on_hover_text(crate::i18n::t("Ağ, Windows Dosya Gezgini'nde açılır"));
             ui.add_space(8.0);
         });
     }
@@ -2588,7 +2671,8 @@ fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, acti
             ui.close_menu();
         }
     }
-    if mi(ui, "🔎", crate::i18n::t("Explorer'da göster")) {
+    let show_label = if cfg!(windows) { "Explorer'da göster" } else { "Dosya yöneticisinde göster" };
+    if mi(ui, "🔎", crate::i18n::t(show_label)) {
         actions.push(Action::ShowInExplorer(path.to_path_buf()));
         ui.close_menu();
     }
@@ -2596,10 +2680,12 @@ fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, acti
         actions.push(Action::Properties(path.to_path_buf()));
         ui.close_menu();
     }
-    ui.separator();
-    if mi(ui, "☰", crate::i18n::t("Daha fazla seçenek göster  Shift+F10")) {
-        actions.push(Action::ShellMenu { extended: false });
-        ui.close_menu();
+    if NATIVE_MENU {
+        ui.separator();
+        if mi(ui, "☰", crate::i18n::t("Daha fazla seçenek göster  Shift+F10")) {
+            actions.push(Action::ShellMenu { extended: false });
+            ui.close_menu();
+        }
     }
 }
 
@@ -2727,7 +2813,7 @@ fn handle_item_click(t: &mut Tab, resp: &egui::Response, row: usize, idx: usize,
             DragAndDrop::set_payload(&resp.ctx, DragPaths(paths));
         }
     }
-    if resp.secondary_clicked() && shift {
+    if NATIVE_MENU && resp.secondary_clicked() && shift {
         actions.push(Action::ShellMenu { extended: true });
     }
 }
@@ -2751,7 +2837,7 @@ impl App {
                 self.tab().selection.clear();
             }
         }
-        let shift_rclick = bg.secondary_clicked() && ui.input(|i| i.modifiers.shift);
+        let shift_rclick = NATIVE_MENU && bg.secondary_clicked() && ui.input(|i| i.modifiers.shift);
         if shift_rclick {
             actions.push(Action::ShellMenu { extended: true });
         } else {
@@ -2996,7 +3082,7 @@ impl App {
                     if e.is_dir {
                         drop_target_p(&painter, &resp, &e.path, accent, actions);
                     }
-                    if !(resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
+                    if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
                         let (p, d) = (e.path.clone(), e.is_dir);
                         resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
                     }
@@ -3184,7 +3270,7 @@ impl App {
                             }
                             ui.label(crate::i18n::tf("Değiştirme: {}", &[&fsutil::format_time(e.modified)]));
                         });
-                        if !(resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
+                        if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
                             let (p, d) = (e.path.clone(), e.is_dir);
                             resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
                         }
@@ -3545,7 +3631,7 @@ impl App {
                     ui.add_space(6.0);
                     egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
                         egui::Grid::new("keys").num_columns(2).striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
-                            for (k, d) in HELP {
+                            for (k, d) in HELP.iter().filter(|(k, _)| NATIVE_MENU || !k.contains("F10")) {
                                 ui.label(RichText::new(crate::i18n::t(k)).monospace().strong());
                                 ui.label(crate::i18n::t(d));
                                 ui.end_row();
@@ -3611,9 +3697,43 @@ const HELP: &[(&str, &str)] = &[
 
 // ================================================================ ana döngü
 
+/// Kenarlıksız pencereyi kenarlarından boyutlandırma (Windows'ta bunu WM_NCHITTEST yapar)
+#[cfg(not(windows))]
+fn resize_edges(ctx: &egui::Context) {
+    use egui::viewport::ResizeDirection as D;
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)) {
+        return;
+    }
+    let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else { return };
+    let r = ctx.screen_rect();
+    let b = 6.0;
+    let (l, rt, t, bt) = (pos.x < r.left() + b, pos.x > r.right() - b, pos.y < r.top() + b, pos.y > r.bottom() - b);
+    let (dir, icon) = match (l, rt, t, bt) {
+        (true, _, true, _) => (D::NorthWest, egui::CursorIcon::ResizeNorthWest),
+        (_, true, true, _) => (D::NorthEast, egui::CursorIcon::ResizeNorthEast),
+        (true, _, _, true) => (D::SouthWest, egui::CursorIcon::ResizeSouthWest),
+        (_, true, _, true) => (D::SouthEast, egui::CursorIcon::ResizeSouthEast),
+        (true, ..) => (D::West, egui::CursorIcon::ResizeWest),
+        (_, true, ..) => (D::East, egui::CursorIcon::ResizeEast),
+        (_, _, true, _) => (D::North, egui::CursorIcon::ResizeNorth),
+        (.., true) => (D::South, egui::CursorIcon::ResizeSouth),
+        _ => return,
+    };
+    ctx.set_cursor_icon(icon);
+    if ctx.input(|i| i.pointer.primary_pressed()) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(not(windows))]
+        let _ = frame;
+        #[cfg(not(windows))]
+        resize_edges(ctx);
+        #[cfg(windows)]
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        #[cfg(windows)]
         if self.hwnd.is_none() {
             if let Ok(h) = frame.window_handle() {
                 if let RawWindowHandle::Win32(w) = h.as_raw() {

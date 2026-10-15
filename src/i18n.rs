@@ -1,5 +1,5 @@
 //! Arayüz dili: Türkçe metinler anahtar, İngilizce karşılıkları aşağıdaki tabloda.
-//! Dil, Windows'un arayüz diline göre seçilir; Görünüm menüsünden değiştirilebilir.
+//! Dil, işletim sisteminin arayüz diline göre seçilir; Görünüm menüsünden değiştirilebilir.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -16,7 +16,15 @@ pub fn english() -> bool {
     ENGLISH.load(Relaxed)
 }
 
+/// Sistem dili (LC_ALL, LC_MESSAGES, LANG) Türkçe değilse İngilizce
+#[cfg(not(windows))]
+pub fn system_prefers_english() -> bool {
+    let lang = ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    !lang.is_some_and(|l| l.starts_with("tr"))
+}
+
 /// Windows arayüz dili Türkçe değilse İngilizce
+#[cfg(windows)]
 pub fn system_prefers_english() -> bool {
     const LANG_TURKISH: u16 = 0x1F;
     let lang = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
@@ -198,6 +206,9 @@ static TABLE: &[(&str, &str)] = &[
     ("{} boş, {} toplam", "{} free of {}"),
     ("Dosya klasörü", "File folder"),
     ("Dosya", "File"),
+    ("{} Dosyası", "{} File"),
+    ("Dosya yöneticisinde göster", "Show in file manager"),
+    ("Dosya yöneticisinde aç", "Open in file manager"),
     ("Aç                              Enter", "Open                              Enter"),
     ("Buraya yapıştır", "Paste here"),
     ("Birlikte aç…", "Open with…"),

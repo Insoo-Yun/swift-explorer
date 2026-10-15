@@ -2,13 +2,15 @@
 
 [English](README.md)
 
-Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazılmış bir dosya yöneticisi. Klasörler arka planda okunduğu için büyük klasörler pencereyi dondurmadan açılır; arama alt klasörlerde paralel yapılır.
+Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazılmış bir dosya yöneticisi. Windows ve Linux'ta çalışır. Klasörler arka planda okunduğu için büyük klasörler pencereyi dondurmadan açılır; arama alt klasörlerde paralel yapılır.
 
 ![Türkçe arayüz, tarihe göre gruplanmış büyük simgeler](docs/turkish.png)
 
 ## İndirme
 
 `SwiftExplorer.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
+
+Linux'ta `swift-explorer-linux-x86_64` dosyasını indirin, `chmod +x` ile çalıştırılabilir yapıp açın.
 
 ## Neler var
 
@@ -28,19 +30,30 @@ Diğer ekran görüntüleri [İngilizce README](README.md)'de.
 
 Tür sütunu ve Shift + sağ tık menüsü Windows'tan gelir; uygulama İngilizceye alınsa da bunlar Windows'un dilinde kalır.
 
+## Linux
+
+Linux sürümü yeni ve Windows sürümü kadar denenmedi. Görünüm ve kısayollar aynı; farklar şunlar:
+
+- İkonlar masaüstünün ikon temasından gelir. PNG, JPEG, GIF, WebP ve BMP için küçük resim gösterilir.
+- Windows'un sağ tık menüsü yok; Shift + sağ tık ve Shift+F10 uygulamanın kendi menüsünü açar.
+- Kopyalanan dosyalar panoya yol listesi olarak yazılır. Başka dosya yöneticilerinden kopyalanan yollar ve `file://` bağlantıları yapıştırılabilir; ters yönü çalışmayabilir.
+- Pencereden dışarı sürükleme henüz yok. Pencereye dosya bırakmak X11'de çalışır.
+- "Bu bilgisayar" sayfası `/` ve `/media`, `/run/media`, `/mnt` altına bağlanan diskleri gösterir.
+- Özellikler ve "Dosya yöneticisinde göster", D-Bus üzerinden dosya yöneticinizi kullanır (Nautilus, Dolphin, Nemo ve Thunar destekler).
+
 ## Derleme
 
-Rust 1.82 ya da daha yenisi ve Windows gerekir.
+Rust 1.82 ya da daha yenisi gerekir.
 
 ```bash
 cargo build --release
 ```
 
-Çalıştırılabilir dosya `target/release/swift-explorer.exe` konumuna yazılır.
+Çalıştırılabilir dosya Windows'ta `target/release/swift-explorer.exe`, Linux'ta `target/release/swift-explorer` konumuna yazılır.
 
 ## Ayarlar
 
-Ayarlar `%APPDATA%\SwiftExplorer\config.json` dosyasında tutulur. `SWIFT_EXPLORER_LANG` ortam değişkeni `en` ya da `tr` yapılırsa dil ayarının önüne geçer.
+Ayarlar Windows'ta `%APPDATA%\SwiftExplorer\config.json`, Linux'ta `~/.config/SwiftExplorer/config.json` dosyasında tutulur. `SWIFT_EXPLORER_LANG` ortam değişkeni `en` ya da `tr` yapılırsa dil ayarının önüne geçer.
 
 ## Bilinen sınırlar
 
@@ -50,4 +63,4 @@ Ayarlar `%APPDATA%\SwiftExplorer\config.json` dosyasında tutulur. `SWIFT_EXPLOR
 
 ## Lisans
 
-[MIT](LICENSE)
+[MIT](LICENSE). Linux sürümü Microsoft'un [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) setinden birkaç ikon içerir ([MIT](assets/LICENSE-fluent-icons.txt)).

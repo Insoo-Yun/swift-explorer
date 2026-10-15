@@ -69,7 +69,23 @@ pub struct Tab {
     pub cursor_path: Option<PathBuf>,
 }
 
+/// Sondaki "/" işaretlerini kırp, "~" ile başlayan yolu ev klasörüne çevir.
+#[cfg(not(windows))]
+pub fn normalize(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix('~') {
+        if rest.is_empty() || rest.starts_with('/') {
+            if let Some(home) = dirs::home_dir() {
+                return normalize(&home.join(rest.trim_start_matches('/')));
+            }
+        }
+    }
+    let t = s.trim_end_matches('/');
+    PathBuf::from(if t.is_empty() && s.starts_with('/') { "/" } else { t })
+}
+
 /// "C:" → "C:\", eğik çizgileri düzelt, sondaki ayırıcıyı kırp.
+#[cfg(windows)]
 pub fn normalize(p: &Path) -> PathBuf {
     let mut s = p.to_string_lossy().replace('/', "\\");
     if s.len() == 2 && s.ends_with(':') {
