@@ -4,6 +4,7 @@ mod app;
 mod fsutil;
 mod i18n;
 mod images;
+mod scheme;
 #[cfg(feature = "screenshot")]
 mod screenshot;
 mod tab;

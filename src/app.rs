@@ -12,6 +12,7 @@ use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil::{self, Conflict, Entry, Job, JobKind, PreviewData, SortKey};
+use crate::scheme;
 use crate::shell::{self, ImageCache, Img, MenuResult};
 use crate::tab::{normalize, Tab, THIS_PC};
 use crate::win::{self, DriveInfo};
@@ -421,6 +422,25 @@ struct Pal {
 }
 
 fn pal(dark: bool) -> Pal {
+    if let Some(c) = scheme::active().filter(|c| c.dark == dark) {
+        let sel = if dark { 0.28 } else { 0.22 };
+        return Pal {
+            strip: c.crust,
+            nav: c.mantle,
+            field: c.surface,
+            field_stroke: if dark { Stroke::NONE } else { Stroke::new(1.0, c.border) },
+            line: c.border,
+            content: c.base,
+            status: c.base,
+            hover: scheme::mix(c.base, c.surface, 0.7),
+            nav_sel: scheme::mix(c.surface, c.border, 0.5),
+            sel: scheme::mix(c.base, c.accent, sel),
+            sel_hover: scheme::mix(c.base, c.accent, sel + 0.08),
+            text: c.text,
+            weak: c.weak,
+            disabled: c.disabled,
+        };
+    }
     if dark {
         Pal {
             strip: Color32::from_rgb(10, 10, 10),
@@ -474,11 +494,18 @@ fn apply_lang(lang: u8) {
     });
 }
 
+/// Şemanın vurgu rengi, yoksa Windows'unki
+fn theme_accent(theme: u8) -> Color32 {
+    scheme::get(theme).map(|c| c.accent).or_else(shell::accent_color).unwrap_or(Color32::from_rgb(0, 120, 212))
+}
+
 fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
+    scheme::set_active(theme);
     ctx.options_mut(|o| {
-        o.theme_preference = match theme {
-            1 => egui::ThemePreference::Light,
-            2 => egui::ThemePreference::Dark,
+        o.theme_preference = match (scheme::get(theme), theme) {
+            (Some(c), _) if c.dark => egui::ThemePreference::Dark,
+            (Some(_), _) | (None, 1) => egui::ThemePreference::Light,
+            (None, 2) => egui::ThemePreference::Dark,
             _ => egui::ThemePreference::System,
         }
     });
@@ -503,45 +530,110 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
                 }
             }
             let v = &mut s.visuals;
-            let (panel, window, extreme, faint, text) = if dark {
-                (Color32::from_rgb(32, 32, 32), Color32::from_rgb(25, 25, 25), Color32::from_rgb(44, 44, 44), Color32::from_rgb(29, 29, 29), Color32::from_rgb(240, 240, 240))
-            } else {
-                (Color32::from_rgb(243, 243, 243), Color32::from_rgb(255, 255, 255), Color32::from_rgb(255, 255, 255), Color32::from_rgb(250, 250, 250), Color32::from_rgb(26, 26, 26))
-            };
-            v.panel_fill = panel;
-            v.window_fill = if dark { Color32::from_rgb(44, 44, 44) } else { Color32::WHITE };
-            v.extreme_bg_color = extreme;
-            v.faint_bg_color = faint;
-            v.code_bg_color = window;
+            let c = Chrome::of(dark);
+            v.panel_fill = c.panel;
+            v.window_fill = c.popup;
+            v.extreme_bg_color = c.extreme;
+            v.faint_bg_color = c.faint;
+            v.code_bg_color = c.window;
             v.override_text_color = None;
             v.hyperlink_color = accent;
             let p = pal(dark);
             v.selection.bg_fill = p.sel;
-            v.selection.stroke = Stroke::new(1.0, text);
+            v.selection.stroke = Stroke::new(1.0, c.text);
             v.window_corner_radius = CornerRadius::same(8);
             v.menu_corner_radius = CornerRadius::same(8);
-            v.window_stroke = Stroke::new(1.0, if dark { Color32::from_gray(60) } else { Color32::from_gray(215) });
+            v.window_stroke = Stroke::new(1.0, c.popup_stroke);
             v.striped = false;
             let w = &mut v.widgets;
             for wv in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
                 wv.corner_radius = CornerRadius::same(5);
             }
             // Gezinti bölmesinin sağındaki ayraç ve menü ayraçları
-            w.noninteractive.bg_stroke = Stroke::new(1.0, if dark { Color32::from_gray(48) } else { Color32::from_gray(229) });
-            w.inactive.weak_bg_fill = if dark { Color32::from_gray(45) } else { Color32::from_gray(251) };
+            w.noninteractive.bg_stroke = Stroke::new(1.0, c.divider);
+            w.inactive.weak_bg_fill = c.button;
             w.inactive.bg_fill = w.inactive.weak_bg_fill;
-            w.inactive.bg_stroke = Stroke::new(1.0, if dark { Color32::from_gray(58) } else { Color32::from_gray(222) });
+            w.inactive.bg_stroke = Stroke::new(1.0, c.button_stroke);
             w.hovered.weak_bg_fill = p.hover;
             w.hovered.bg_fill = w.hovered.weak_bg_fill;
             w.hovered.bg_stroke = Stroke::NONE;
-            w.active.weak_bg_fill = if dark { Color32::from_gray(66) } else { Color32::from_gray(222) };
+            w.active.weak_bg_fill = c.pressed;
             w.active.bg_fill = w.active.weak_bg_fill;
             w.active.bg_stroke = Stroke::NONE;
-            w.inactive.fg_stroke.color = text;
-            w.hovered.fg_stroke.color = text;
-            w.active.fg_stroke.color = text;
-            w.noninteractive.fg_stroke.color = if dark { Color32::from_gray(225) } else { Color32::from_gray(35) };
+            w.inactive.fg_stroke.color = c.text;
+            w.hovered.fg_stroke.color = c.text;
+            w.active.fg_stroke.color = c.text;
+            w.noninteractive.fg_stroke.color = c.label;
         });
+    }
+}
+
+/// egui'nin kendi çizdiği yüzeyler: menüler, düğmeler, metin kutuları
+struct Chrome {
+    panel: Color32,
+    window: Color32,
+    popup: Color32,
+    popup_stroke: Color32,
+    extreme: Color32,
+    faint: Color32,
+    divider: Color32,
+    button: Color32,
+    button_stroke: Color32,
+    pressed: Color32,
+    text: Color32,
+    label: Color32,
+}
+
+impl Chrome {
+    fn of(dark: bool) -> Chrome {
+        if let Some(c) = scheme::active().filter(|c| c.dark == dark) {
+            let field = if dark { c.surface } else { c.base };
+            return Chrome {
+                panel: c.mantle,
+                window: c.base,
+                popup: field,
+                popup_stroke: c.border,
+                extreme: field,
+                faint: scheme::mix(c.base, c.mantle, 0.5),
+                divider: scheme::mix(c.mantle, c.border, 0.6),
+                button: if dark { c.surface } else { scheme::mix(c.base, c.surface, 0.3) },
+                button_stroke: c.border,
+                pressed: c.border,
+                text: c.text,
+                label: c.text,
+            };
+        }
+        if dark {
+            Chrome {
+                panel: Color32::from_rgb(32, 32, 32),
+                window: Color32::from_rgb(25, 25, 25),
+                popup: Color32::from_rgb(44, 44, 44),
+                popup_stroke: Color32::from_gray(60),
+                extreme: Color32::from_rgb(44, 44, 44),
+                faint: Color32::from_rgb(29, 29, 29),
+                divider: Color32::from_gray(48),
+                button: Color32::from_gray(45),
+                button_stroke: Color32::from_gray(58),
+                pressed: Color32::from_gray(66),
+                text: Color32::from_rgb(240, 240, 240),
+                label: Color32::from_gray(225),
+            }
+        } else {
+            Chrome {
+                panel: Color32::from_rgb(243, 243, 243),
+                window: Color32::WHITE,
+                popup: Color32::WHITE,
+                popup_stroke: Color32::from_gray(215),
+                extreme: Color32::WHITE,
+                faint: Color32::from_rgb(250, 250, 250),
+                divider: Color32::from_gray(229),
+                button: Color32::from_gray(251),
+                button_stroke: Color32::from_gray(222),
+                pressed: Color32::from_gray(222),
+                text: Color32::from_rgb(26, 26, 26),
+                label: Color32::from_gray(35),
+            }
+        }
     }
 }
 
@@ -889,7 +981,7 @@ impl App {
         setup_fonts(&ctx);
 
         let cfg = load_config();
-        let accent = shell::accent_color().unwrap_or(Color32::from_rgb(0, 120, 212));
+        let accent = theme_accent(cfg.theme);
         apply_lang(cfg.lang);
         load_cjk_fonts(&ctx);
         apply_theme(&ctx, accent, cfg.theme);
@@ -2307,10 +2399,16 @@ impl App {
                 ui.checkbox(&mut self.show_ext, crate::i18n::t("Dosya adı uzantıları"));
                 ui.separator();
                 ui.label(RichText::new(crate::i18n::t("Tema")).weak());
-                ui.horizontal(|ui| {
-                    for (v, n) in [(0u8, crate::i18n::t("Sistem")), (1, crate::i18n::t("Açık")), (2, crate::i18n::t("Koyu"))] {
-                        if ui.selectable_label(self.theme == v, n).clicked() {
+                let names = [crate::i18n::t("Sistem"), crate::i18n::t("Açık"), crate::i18n::t("Koyu")].into_iter().chain(scheme::SCHEMES.iter().map(|c| c.name));
+                ui.horizontal_wrapped(|ui| {
+                    for (v, n) in names.enumerate() {
+                        let v = v as u8;
+                        if v == scheme::FIRST {
+                            ui.end_row();
+                        }
+                        if ui.selectable_label(self.theme == v, n).clicked() && self.theme != v {
                             self.theme = v;
+                            self.accent = theme_accent(v);
                             apply_theme(ui.ctx(), self.accent, v);
                         }
                     }
