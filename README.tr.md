@@ -1,5 +1,9 @@
 # Swift Explorer
 
+[![Sürüm](https://img.shields.io/github/v/release/misutesu-desu/swift-explorer)](../../releases/latest)
+[![Derleme](https://github.com/misutesu-desu/swift-explorer/actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
+[![Lisans: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 [English](README.md)
 
 Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazılmış bir dosya yöneticisi. Windows ve Linux'ta çalışır. Klasörler arka planda okunduğu için büyük klasörler pencereyi dondurmadan açılır; arama alt klasörlerde paralel yapılır.
@@ -9,6 +13,13 @@ Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazıl
 ## İndirme
 
 `SwiftExplorer.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
+
+[Scoop](https://scoop.sh) ile:
+
+```powershell
+scoop bucket add misutesu https://github.com/misutesu-desu/scoop-bucket
+scoop install swift-explorer
+```
 
 Linux'ta kendi kullanıcınız için şu komutla kurabilirsiniz:
 
@@ -33,7 +44,8 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Hedefte aynı adlı dosya varsa değiştirmek, atlamak ya da ikisini de saklamak arasında seçim sorar.
 - Diskteki değişiklikler açık klasörde anında görünür.
 - İndirilenler, Explorer'daki gibi değiştirme tarihine göre gruplanır (Bugün, Dün, Geçen hafta…). Diğer klasörler Sırala > Grupla'dan gruplanabilir.
-- Türkçe ve İngilizce arayüz. Dil Windows'a göre seçilir, Görünüm > Dil'den değiştirilebilir.
+- Türkçe, İngilizce, Almanca, İspanyolca, Fransızca, Portekizce (Brezilya), Rusça, Çince (Basitleştirilmiş) ve Japonca arayüz. Dil Windows'a göre seçilir, Görünüm > Dil'den değiştirilebilir.
+- Çince, Japonca ve Korece dosya adları sistemin CJK fontlarıyla görünür.
 
 Diğer ekran görüntüleri [İngilizce README](README.md)'de.
 
@@ -60,9 +72,13 @@ cargo build --release
 
 Çalıştırılabilir dosya Windows'ta `target/release/swift-explorer.exe`, Linux'ta `target/release/swift-explorer` konumuna yazılır.
 
+## Çeviriler
+
+Her dil [`src/i18n/`](src/i18n) içinde tek bir dosyadır. Yeni dil eklemek için `de.rs`'yi kopyalayın, her satırdaki ikinci metni çevirin, ardından [`src/i18n.rs`](src/i18n.rs) içine bir `mod` satırı ekleyip dili `LANGS`, `tables()` ve `system_lang()` içine yazın. Mevcut çevirilerdeki düzeltmeler de memnuniyetle karşılanır; henüz anadili bu diller olan biri kontrol etmedi.
+
 ## Ayarlar
 
-Ayarlar Windows'ta `%APPDATA%\SwiftExplorer\config.json`, Linux'ta `~/.config/SwiftExplorer/config.json` dosyasında tutulur. `SWIFT_EXPLORER_LANG` ortam değişkeni `en` ya da `tr` yapılırsa dil ayarının önüne geçer.
+Ayarlar Windows'ta `%APPDATA%\SwiftExplorer\config.json`, Linux'ta `~/.config/SwiftExplorer/config.json` dosyasında tutulur. `SWIFT_EXPLORER_LANG` ortam değişkenine bir dil kodu (`en`, `tr`, `de`, `es`, `fr`, `pt`, `ru`, `zh`, `ja`) verilirse dil ayarının önüne geçer.
 
 ## Bilinen sınırlar
 
