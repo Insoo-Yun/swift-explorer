@@ -25,7 +25,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("fr", "Français"),
     ("pt", "Português (Brasil)"),
     ("ru", "Русский"),
-    ("zh", "中文（简体）"),
+    ("zh", "简体中文"),
     ("ja", "日本語"),
 ];
 
