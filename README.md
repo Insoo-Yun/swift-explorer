@@ -4,7 +4,7 @@
 [![Build](https://github.com/misutesu-desu/swift-explorer/actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[Türkçe](README.tr.md)
+[Türkçe](README.tr.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 A file manager for Windows and Linux that looks and behaves like the Windows 11 File Explorer, written in Rust. Folders are read on background threads, so large ones open without freezing the window, and search runs across subfolders in parallel.
 
