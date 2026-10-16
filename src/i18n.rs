@@ -3,6 +3,7 @@
 //! Dil, işletim sisteminin arayüz diline göre seçilir; Görünüm menüsünden değiştirilebilir.
 
 mod de;
+mod es;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -15,6 +16,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("tr", "Türkçe"),
     ("en", "English"),
     ("de", "Deutsch"),
+    ("es", "Español"),
 ];
 
 const EN: usize = 1;
@@ -49,6 +51,7 @@ pub fn system_lang() -> usize {
     let code = match (lang & 0x3FF, lang) {
         (0x1F, _) => "tr",
         (0x07, _) => "de",
+        (0x0A, _) => "es",
         _ => "en",
     };
     lang_index(code).unwrap_or(EN)
@@ -57,7 +60,7 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE];
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
@@ -112,6 +115,7 @@ fn singular(s: String) -> String {
     let rules: &[(&str, &str)] = match lang_code() {
         "en" => &[("1 items", "1 item")],
         "de" => &[("1 Elemente", "1 Element")],
+        "es" => &[("1 elementos seleccionados", "1 elemento seleccionado"), ("1 elementos", "1 elemento")],
         _ => return s,
     };
     rules.iter().fold(s, |s, (many, one)| replace_count(s, many, one))
@@ -409,6 +413,8 @@ mod tests {
         set_lang(lang_index("en").unwrap());
         assert_eq!(singular("1 items selected".into()), "1 item selected");
         assert_eq!(singular("11 items".into()), "11 items");
+        set_lang(lang_index("es").unwrap());
+        assert_eq!(singular("1 elementos seleccionados".into()), "1 elemento seleccionado");
         set_lang(0);
     }
 
