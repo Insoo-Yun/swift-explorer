@@ -480,6 +480,8 @@ pub struct Job {
     pub done: AtomicU64,
     pub files: AtomicU64,
     pub finished: AtomicBool,
+    /// Kopyalama bitti, yazılanlar diske indiriliyor
+    pub syncing: AtomicBool,
     pub cancel: AtomicBool,
     pub current: Mutex<String>,
     pub errors: Mutex<Vec<String>>,
@@ -499,6 +501,7 @@ impl Job {
             done: AtomicU64::new(0),
             files: AtomicU64::new(0),
             finished: AtomicBool::new(false),
+            syncing: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
             current: Mutex::new(String::new()),
             errors: Mutex::new(Vec::new()),
@@ -550,7 +553,8 @@ fn tree_size(p: &Path, cancel: &AtomicBool) -> u64 {
     }
 }
 
-fn copy_tree(src: &Path, dst: &Path, job: &Job) -> io::Result<()> {
+/// `written`: diske indirilecek dosyalar, bkz. `sync_to_disk`
+fn copy_tree(src: &Path, dst: &Path, job: &Job, written: &mut Vec<PathBuf>) -> io::Result<()> {
     job.interrupted()?;
     let md = fs::symlink_metadata(src)?;
     let attrs = attributes(src, &md);
@@ -561,7 +565,7 @@ fn copy_tree(src: &Path, dst: &Path, job: &Job) -> io::Result<()> {
         fs::create_dir_all(dst)?;
         for de in fs::read_dir(src)? {
             let de = de?;
-            if let Err(e) = copy_tree(&de.path(), &dst.join(de.file_name()), job) {
+            if let Err(e) = copy_tree(&de.path(), &dst.join(de.file_name()), job, written) {
                 if e.kind() == io::ErrorKind::Interrupted {
                     return Err(e);
                 }
@@ -596,8 +600,55 @@ fn copy_tree(src: &Path, dst: &Path, job: &Job) -> io::Result<()> {
             }
         }
         job.files.fetch_add(1, Relaxed);
+        written.push(dst.to_path_buf());
     }
     Ok(())
+}
+
+/// Yazılanları işletim sisteminin önbelleğinden diske indirir, terminaldeki `sync` gibi.
+/// Bu olmadan iş bittiğinde veri hâlâ bellekte olabilir; USB bellek o anda çıkarılırsa
+/// dosyalar yarım ya da boş kalır.
+#[cfg(windows)]
+fn sync_to_disk(written: &[PathBuf], _dest: &Path) -> Vec<String> {
+    written.par_iter().filter_map(|f| flush_file(f).err().map(|e| format!("{}: {e}", f.display()))).collect()
+}
+
+/// FlushFileBuffers yazma izni ister; salt okunur dosyada öznitelik geçici olarak kaldırılır.
+#[cfg(windows)]
+fn flush_file(p: &Path) -> io::Result<()> {
+    let open = || fs::OpenOptions::new().write(true).open(p)?.sync_all();
+    match open() {
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            let mut perm = fs::metadata(p)?.permissions();
+            if !perm.readonly() {
+                return Err(e);
+            }
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            fs::set_permissions(p, perm.clone())?;
+            let r = open();
+            perm.set_readonly(true);
+            fs::set_permissions(p, perm)?;
+            r
+        }
+        r => r,
+    }
+}
+
+/// syncfs hedefin bulunduğu dosya sisteminin tamamını tek çağrıda yazar; dosya dosya fsync'ten
+/// çok daha hızlı. Aynı sürücüdeki yeniden adlandırmalar da böylece kalıcı olur.
+#[cfg(not(windows))]
+fn sync_to_disk(_written: &[PathBuf], dest: &Path) -> Vec<String> {
+    use std::os::fd::AsRawFd;
+    let d = match fs::File::open(dest) {
+        Ok(d) => d,
+        Err(e) => return vec![format!("{}: {e}", dest.display())],
+    };
+    if unsafe { libc::syncfs(d.as_raw_fd()) } == 0 {
+        vec![]
+    } else {
+        vec![format!("{}: {}", dest.display(), io::Error::last_os_error())]
+    }
 }
 
 pub fn spawn_transfer(srcs: Vec<PathBuf>, dest: PathBuf, cut: bool, conflict: Conflict, ctx: egui::Context) -> Arc<Job> {
@@ -641,20 +692,34 @@ pub fn spawn_transfer(srcs: Vec<PathBuf>, dest: PathBuf, cut: bool, conflict: Co
         }
         let total: u64 = remaining.par_iter().map(|(s, _)| tree_size(s, &j.cancel)).sum();
         j.total.store(total, Relaxed);
+        let mut written = Vec::new();
+        let mut copied = Vec::new();
         for (s, target) in remaining {
-            match copy_tree(&s, &target, &j) {
-                Ok(()) => {
-                    if cut {
-                        let r = if s.is_dir() { fs::remove_dir_all(&s) } else { fs::remove_file(&s) };
-                        if let Err(e) = r {
-                            j.err(format!("{}: {e}", s.display()));
-                        }
-                    }
-                    j.pairs.lock().unwrap().push((s, target));
-                }
+            match copy_tree(&s, &target, &j, &mut written) {
+                Ok(()) => copied.push((s, target)),
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => break,
                 Err(e) => j.err(format!("{}: {e}", s.display())),
             }
+        }
+        j.syncing.store(true, Relaxed);
+        ctx.request_repaint();
+        let sync_errors = sync_to_disk(&written, &dest);
+        let synced = sync_errors.is_empty();
+        for e in sync_errors {
+            j.err(e);
+        }
+        for (s, target) in copied {
+            if cut {
+                // Kaynak ancak kopyası diske yazıldıktan sonra silinir
+                if !synced {
+                    continue;
+                }
+                let r = if s.is_dir() { fs::remove_dir_all(&s) } else { fs::remove_file(&s) };
+                if let Err(e) = r {
+                    j.err(format!("{}: {e}", s.display()));
+                }
+            }
+            j.pairs.lock().unwrap().push((s, target));
         }
         j.finished.store(true, Relaxed);
         ctx.request_repaint();
@@ -886,5 +951,35 @@ mod tests {
         assert_eq!(v, v2);
         println!("15000 ad sıralama: yeni {new:?}, eski {old:?}");
     }
-}
 
+    #[test]
+    fn copy_waits_for_disk_and_keeps_read_only_files() {
+        let root = std::env::temp_dir().join(format!("swift-explorer-sync-{}", std::process::id()));
+        let (src, dest) = (root.join("src"), root.join("dest"));
+        fs::create_dir_all(src.join("klasör")).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        let ro = src.join("klasör").join("salt-okunur.txt");
+        fs::write(&ro, b"veri").unwrap();
+        let mut perm = fs::metadata(&ro).unwrap().permissions();
+        perm.set_readonly(true);
+        fs::set_permissions(&ro, perm).unwrap();
+
+        let job = spawn_transfer(vec![src.join("klasör")], dest.clone(), false, Conflict::Replace, egui::Context::default());
+        while !job.finished.load(Relaxed) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(job.syncing.load(Relaxed));
+        assert_eq!(*job.errors.lock().unwrap(), Vec::<String>::new());
+        let copied = dest.join("klasör").join("salt-okunur.txt");
+        assert_eq!(fs::read(&copied).unwrap(), b"veri");
+        assert!(fs::metadata(&copied).unwrap().permissions().readonly());
+
+        for f in [&ro, &copied] {
+            let mut perm = fs::metadata(f).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            fs::set_permissions(f, perm).unwrap();
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+}
