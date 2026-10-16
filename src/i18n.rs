@@ -5,6 +5,7 @@
 mod de;
 mod es;
 mod fr;
+mod ja;
 mod pt;
 mod ru;
 mod zh;
@@ -25,6 +26,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("pt", "Português (Brasil)"),
     ("ru", "Русский"),
     ("zh", "中文（简体）"),
+    ("ja", "日本語"),
 ];
 
 const EN: usize = 1;
@@ -68,6 +70,7 @@ pub fn system_lang() -> usize {
         (0x16, _) => "pt",
         (0x19, _) => "ru",
         (0x04, 0x0804 | 0x1004) => "zh",
+        (0x11, _) => "ja",
         _ => "en",
     };
     lang_index(code).unwrap_or(EN)
@@ -76,7 +79,7 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE, pt::TABLE, ru::TABLE, zh::TABLE];
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE, pt::TABLE, ru::TABLE, zh::TABLE, ja::TABLE];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
