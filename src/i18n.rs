@@ -6,6 +6,7 @@ mod de;
 mod es;
 mod fr;
 mod pt;
+mod ru;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -21,6 +22,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("es", "Español"),
     ("fr", "Français"),
     ("pt", "Português (Brasil)"),
+    ("ru", "Русский"),
 ];
 
 const EN: usize = 1;
@@ -59,6 +61,7 @@ pub fn system_lang() -> usize {
         (0x0A, _) => "es",
         (0x0C, _) => "fr",
         (0x16, _) => "pt",
+        (0x19, _) => "ru",
         _ => "en",
     };
     lang_index(code).unwrap_or(EN)
@@ -67,7 +70,7 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE, pt::TABLE];
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE, pt::TABLE, ru::TABLE];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
