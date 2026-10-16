@@ -3687,20 +3687,24 @@ impl App {
                     let total = job.total.load(Relaxed);
                     let done = job.done.load(Relaxed);
                     let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
+                    let syncing = job.syncing.load(Relaxed);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&job.label).strong());
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(egui::Button::new(icon_rt("✕")).frame(false)).on_hover_text(crate::i18n::t("İptal")).clicked() {
+                            // Diske yazma yarıda kesilemez; iptal edilmiş gibi görünmesin
+                            if !syncing && ui.add(egui::Button::new(icon_rt("✕")).frame(false)).on_hover_text(crate::i18n::t("İptal")).clicked() {
                                 job.cancel.store(true, Relaxed);
                             }
                         });
                     });
                     let cur = job.current.lock().unwrap().clone();
-                    if !cur.is_empty() {
+                    if syncing {
+                        ui.add(egui::Label::new(RichText::new(crate::i18n::t("Diske yazılıyor, bitene kadar sürücüyü çıkarmayın")).small().weak()).wrap());
+                    } else if !cur.is_empty() {
                         ui.add(egui::Label::new(RichText::new(cur).small().weak()).truncate());
                     }
                     ui.add(egui::ProgressBar::new(frac).desired_height(6.0).fill(accent).corner_radius(3.0));
-                    if job.kind == JobKind::Transfer && total > 0 {
+                    if job.kind == JobKind::Transfer && total > 0 && !syncing {
                         let el = job.started.elapsed().as_secs_f64().max(0.001);
                         let speed = done as f64 / el;
                         let left = if speed > 0.0 { (total - done.min(total)) as f64 / speed } else { 0.0 };
@@ -4031,7 +4035,7 @@ impl eframe::App for App {
             } else if j.kind == JobKind::Restore {
                 self.toast(crate::i18n::t("Geri dönüşüm kutusundan geri yüklendi"), false);
             } else if j.kind == JobKind::Transfer && j.started.elapsed() > Duration::from_secs(2) {
-                self.toast(crate::i18n::tf("Tamamlandı: {}", &[&j.label]), false);
+                self.toast(crate::i18n::tf("Diske yazıldı, sürücüyü çıkarabilirsiniz: {}", &[&j.label]), false);
             }
         }
         if !self.jobs.is_empty() {
