@@ -329,6 +329,47 @@ fn setup_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Çince, Japonca ve Korece glifler: dosya adları ve arayüz kutucuk yerine yazıyla görünsün diye
+/// sistemin CJK fontları yedek olarak eklenir. Dosyalar 5-20 MB olduğundan arka planda okunur.
+fn load_cjk_fonts(ctx: &egui::Context) {
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        for (name, data) in cjk_fonts() {
+            let families = [egui::FontFamily::Proportional, egui::FontFamily::Name(ICONS.into()), egui::FontFamily::Name(FLUENT.into())]
+                .into_iter()
+                .map(|family| egui::epaint::text::InsertFontFamily { family, priority: egui::epaint::text::FontPriority::Lowest })
+                .collect();
+            ctx.add_font(egui::epaint::text::FontInsert::new(name, data, families));
+        }
+        ctx.request_repaint();
+    });
+}
+
+/// Microsoft YaHei (Çince ve kana), Hangul için Malgun Gothic. Japonca arayüzde Japon glif
+/// biçimleri için önce Yu Gothic; YaHei yine de kalır, çünkü Yu Gothic'te Basitleştirilmiş Çince yok.
+#[cfg(windows)]
+fn cjk_fonts() -> Vec<(&'static str, egui::FontData)> {
+    let read = |file: &str| std::fs::read(format!("C:\\Windows\\Fonts\\{file}")).ok().map(egui::FontData::from_owned);
+    // Yu Gothic'in glifleri Segoe UI'ın taban çizgisinin üstünde kalıyor; biraz aşağı alınır
+    let ja = (crate::i18n::lang_code() == "ja").then(|| read("YuGothM.ttc")).flatten().map(|d| d.tweak(egui::FontTweak { y_offset_factor: 0.15, ..Default::default() }));
+    [("cjk_ja", ja), ("cjk", read("msyh.ttc")), ("hangul", read("malgun.ttf"))].into_iter().filter_map(|(n, d)| Some((n, d?))).collect()
+}
+
+/// fontconfig'in Çince (Japonca arayüzde Japonca) için seçtiği font; Noto Sans CJK Korece'yi de kapsar
+#[cfg(not(windows))]
+fn cjk_fonts() -> Vec<(&'static str, egui::FontData)> {
+    let lang = if crate::i18n::lang_code() == "ja" { "ja" } else { "zh-cn" };
+    let font = || {
+        let out = std::process::Command::new("fc-match").args(["-f", "%{file}\n%{index}", &format!("sans-serif:lang={lang}")]).output().ok()?;
+        let out = String::from_utf8(out.stdout).ok()?;
+        let (path, index) = out.split_once('\n')?;
+        let mut data = egui::FontData::from_owned(std::fs::read(path.trim()).ok()?);
+        data.index = index.trim().parse().unwrap_or(0);
+        Some(data)
+    };
+    font().map(|d| vec![("cjk", d)]).unwrap_or_default()
+}
+
 /// Masaüstünün arayüz fontu: GNOME'un ayarı (ör. Adwaita Sans), yoksa fontconfig'in "sans-serif" seçimi
 #[cfg(not(windows))]
 fn linux_ui_font() -> Option<Vec<u8>> {
@@ -850,6 +891,7 @@ impl App {
         let cfg = load_config();
         let accent = shell::accent_color().unwrap_or(Color32::from_rgb(0, 120, 212));
         apply_lang(cfg.lang);
+        load_cjk_fonts(&ctx);
         apply_theme(&ctx, accent, cfg.theme);
 
         let (paths, active) = startup_tabs(&cfg, start);
