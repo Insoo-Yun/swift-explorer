@@ -422,18 +422,14 @@ fn pal_of(ui: &egui::Ui) -> Pal {
 }
 
 
-/// Dil ayarını uygular (0 = Windows diline göre)
+/// Dil ayarını uygular (0 = Windows diline göre, n = `i18n::LANGS` içindeki n-1. dil)
 fn apply_lang(lang: u8) {
-    // SWIFT_EXPLORER_LANG=en|tr ayarı geçersiz kılar (test ve kısayol için)
-    let lang = match std::env::var("SWIFT_EXPLORER_LANG").as_deref() {
-        Ok("tr") => 1,
-        Ok("en") => 2,
-        _ => lang,
-    };
-    crate::i18n::set_english(match lang {
-        1 => false,
-        2 => true,
-        _ => crate::i18n::system_prefers_english(),
+    // SWIFT_EXPLORER_LANG=en|tr|de|… ayarı geçersiz kılar (test ve kısayol için)
+    let forced = std::env::var("SWIFT_EXPLORER_LANG").ok().and_then(|c| crate::i18n::lang_index(&c));
+    crate::i18n::set_lang(match (forced, lang) {
+        (Some(i), _) => i,
+        (None, 0) => crate::i18n::system_lang(),
+        (None, n) => n as usize - 1,
     });
 }
 
@@ -2278,8 +2274,9 @@ impl App {
                     }
                 });
                 ui.label(RichText::new(crate::i18n::t("Dil")).weak());
-                ui.horizontal(|ui| {
-                    for (v, n) in [(0u8, crate::i18n::t("Sistem")), (1, "Türkçe"), (2, "English")] {
+                ui.horizontal_wrapped(|ui| {
+                    let langs = crate::i18n::LANGS.iter().enumerate().map(|(i, (_, name))| (i as u8 + 1, *name));
+                    for (v, n) in std::iter::once((0u8, crate::i18n::t("Sistem"))).chain(langs) {
                         if ui.selectable_label(self.lang == v, n).clicked() && self.lang != v {
                             self.lang = v;
                             apply_lang(v);

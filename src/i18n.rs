@@ -1,47 +1,72 @@
-//! Arayüz dili: Türkçe metinler anahtar, İngilizce karşılıkları aşağıdaki tabloda.
+//! Arayüz dili: Türkçe metinler anahtar. İngilizce karşılıkları aşağıdaki tabloda,
+//! diğer diller `i18n/` altında, her biri aynı anahtarlarla ayrı bir dosyada.
 //! Dil, işletim sisteminin arayüz diline göre seçilir; Görünüm menüsünden değiştirilebilir.
+
 
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::OnceLock;
 
-static ENGLISH: AtomicBool = AtomicBool::new(false);
+/// Diller: kod ve kendi dilindeki adı. Ayarlarda bu listedeki sıra + 1 saklanır
+/// (0 = sistem dili), bu yüzden yeni diller sona eklenir.
+pub const LANGS: &[(&str, &str)] = &[
+    ("tr", "Türkçe"),
+    ("en", "English"),
+];
 
-pub fn set_english(on: bool) {
-    ENGLISH.store(on, Relaxed);
+const EN: usize = 1;
+
+static LANG: AtomicUsize = AtomicUsize::new(0);
+
+/// Geçerli dili `LANGS` içindeki sırasıyla seçer
+pub fn set_lang(i: usize) {
+    LANG.store(i.min(LANGS.len() - 1), Relaxed);
 }
 
-pub fn english() -> bool {
-    ENGLISH.load(Relaxed)
+pub fn lang_code() -> &'static str {
+    LANGS[LANG.load(Relaxed)].0
 }
 
-/// Sistem dili (LC_ALL, LC_MESSAGES, LANG) Türkçe değilse İngilizce
+pub fn lang_index(code: &str) -> Option<usize> {
+    let code = code.to_ascii_lowercase();
+    LANGS.iter().position(|(c, _)| code.starts_with(c))
+}
+
+/// Sistem dili (LC_ALL, LC_MESSAGES, LANG); desteklenmiyorsa İngilizce
 #[cfg(not(windows))]
-pub fn system_prefers_english() -> bool {
+pub fn system_lang() -> usize {
     let lang = ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
-    !lang.is_some_and(|l| l.starts_with("tr"))
+    lang.and_then(|l| lang_index(&l)).unwrap_or(EN)
 }
 
-/// Windows arayüz dili Türkçe değilse İngilizce
+/// Windows arayüz dili; desteklenmiyorsa İngilizce
 #[cfg(windows)]
-pub fn system_prefers_english() -> bool {
-    const LANG_TURKISH: u16 = 0x1F;
+pub fn system_lang() -> usize {
     let lang = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
-    lang & 0x3FF != LANG_TURKISH
+    let code = match (lang & 0x3FF, lang) {
+        (0x1F, _) => "tr",
+        _ => "en",
+    };
+    lang_index(code).unwrap_or(EN)
 }
 
-fn map() -> &'static HashMap<&'static str, &'static str> {
-    static MAP: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    MAP.get_or_init(|| TABLE.iter().copied().collect())
+fn tables() -> &'static [HashMap<&'static str, &'static str>] {
+    static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
+    MAPS.get_or_init(|| {
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE];
+        tables.iter().map(|t| t.iter().copied().collect()).collect()
+    })
 }
 
-/// Metnin geçerli dildeki karşılığı (Türkçe anahtar; çevirisi yoksa kendisi)
+/// Metnin geçerli dildeki karşılığı (Türkçe anahtar; çevirisi yoksa İngilizcesi, o da yoksa kendisi)
 pub fn t(s: &str) -> &str {
-    if !english() {
+    let i = LANG.load(Relaxed);
+    if i == 0 {
         return s;
     }
-    map().get(s).copied().unwrap_or(s)
+    let maps = tables();
+    maps[i].get(s).or_else(|| maps[EN].get(s)).copied().unwrap_or(s)
 }
 
 /// Yer tutuculu metin: `{}` sırayla, `{0}` `{1}` dizine göre doldurulur.
@@ -75,25 +100,31 @@ pub fn tf(key: &str, args: &[&dyn Display]) -> String {
         rest = &after[j + 1..];
     }
     out.push_str(&rest.replace("}}", "}"));
-    if english() {
-        out = singular(out);
-    }
-    out
+    singular(out)
 }
 
-/// "1 items" → "1 item" (öncesinde başka rakam yoksa)
+/// "1 items" → "1 item" gibi tekil düzeltmesi (sayının öncesinde başka rakam yoksa).
+/// Kuralı olmayan dillerin metinleri çoğul eki gerektirmeyecek biçimde yazılır.
 fn singular(s: String) -> String {
+    let rules: &[(&str, &str)] = match lang_code() {
+        "en" => &[("1 items", "1 item")],
+        _ => return s,
+    };
+    rules.iter().fold(s, |s, (many, one)| replace_count(s, many, one))
+}
+
+fn replace_count(s: String, many: &str, one: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s.as_str();
-    while let Some(i) = rest.find("1 items") {
+    while let Some(i) = rest.find(many) {
         let prev = rest[..i].chars().last();
         out.push_str(&rest[..i]);
         if prev.is_some_and(|c| c.is_ascii_digit() || c == '.' || c == ',') {
-            out.push_str("1 items");
+            out.push_str(many);
         } else {
-            out.push_str("1 item");
+            out.push_str(one);
         }
-        rest = &rest[i + "1 items".len()..];
+        rest = &rest[i + many.len()..];
     }
     out.push_str(rest);
     out
@@ -353,3 +384,33 @@ static TABLE: &[(&str, &str)] = &[
     ("Sürücü", "Drive"),
     ("%{}  ·  {}/sn  ·  yaklaşık {} kaldı", "{0}%  ·  {1}/s  ·  about {2} left"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn every_language_has_the_same_keys() {
+        let keys: HashSet<&str> = TABLE.iter().map(|(k, _)| *k).collect();
+        for (i, (code, _)) in LANGS.iter().enumerate().skip(2) {
+            let map = &tables()[i];
+            let lang: HashSet<&str> = map.keys().copied().collect();
+            assert_eq!(lang, keys, "{code}");
+        }
+    }
+
+    #[test]
+    fn singular_only_for_a_lone_one() {
+        set_lang(lang_index("en").unwrap());
+        assert_eq!(singular("1 items selected".into()), "1 item selected");
+        assert_eq!(singular("11 items".into()), "11 items");
+        set_lang(0);
+    }
+
+    #[test]
+    fn locale_codes() {
+        assert_eq!(lang_index("en_US.UTF-8"), Some(1));
+        assert_eq!(lang_index("C.UTF-8"), None);
+    }
+}
