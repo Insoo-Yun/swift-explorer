@@ -41,6 +41,11 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.4.1" date="2026-10-16">
+      <description>
+        <p>Japanese text lines up with Latin letters in file names and labels.</p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-10-16">
       <description>
         <p>Seven new interface languages.</p>
