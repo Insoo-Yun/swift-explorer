@@ -351,7 +351,7 @@ fn load_cjk_fonts(ctx: &egui::Context) {
 fn cjk_fonts() -> Vec<(&'static str, egui::FontData)> {
     let read = |file: &str| std::fs::read(format!("C:\\Windows\\Fonts\\{file}")).ok().map(egui::FontData::from_owned);
     // Yu Gothic'in glifleri Segoe UI'ın taban çizgisinin üstünde kalıyor; biraz aşağı alınır
-    let ja = (crate::i18n::lang_code() == "ja").then(|| read("YuGothM.ttc")).flatten().map(|d| d.tweak(egui::FontTweak { y_offset_factor: 0.15, ..Default::default() }));
+    let ja = (crate::i18n::lang_code() == "ja").then(|| read("YuGothM.ttc")).flatten().map(|d| d.tweak(egui::FontTweak { y_offset_factor: 0.3, ..Default::default() }));
     [("cjk_ja", ja), ("cjk", read("msyh.ttc")), ("hangul", read("malgun.ttf"))].into_iter().filter_map(|(n, d)| Some((n, d?))).collect()
 }
 
