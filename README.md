@@ -1,5 +1,9 @@
 # Swift Explorer
 
+[![Release](https://img.shields.io/github/v/release/misutesu-desu/swift-explorer)](../../releases/latest)
+[![Build](https://github.com/misutesu-desu/swift-explorer/actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 [Türkçe](README.tr.md)
 
 A file manager for Windows and Linux that looks and behaves like the Windows 11 File Explorer, written in Rust. Folders are read on background threads, so large ones open without freezing the window, and search runs across subfolders in parallel.
@@ -9,6 +13,13 @@ A file manager for Windows and Linux that looks and behaves like the Windows 11 
 ## Download
 
 Get `SwiftExplorer.exe` from the [Releases](../../releases) page. It is a single file with no installer. Made for Windows 11; Windows 10 should work but hasn't been tested.
+
+With [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add misutesu https://github.com/misutesu-desu/scoop-bucket
+scoop install swift-explorer
+```
 
 On Linux, install it for your user with:
 
@@ -33,7 +44,8 @@ Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with 
 - When a file with the same name already exists, it asks whether to replace, skip or keep both.
 - Folders update live when files change on disk.
 - Downloads is grouped by date modified (Today, Yesterday, Last week…), like in Explorer. Other folders can be grouped from Sort > Group by.
-- English and Turkish interface. The language follows Windows and can be changed from View > Language.
+- Interface in English, Turkish, German, Spanish, French, Brazilian Portuguese, Russian, Simplified Chinese and Japanese. The language follows Windows and can be changed from View > Language.
+- Chinese, Japanese and Korean file names display with the system's CJK fonts.
 
 | Details | This PC |
 | --- | --- |
@@ -66,9 +78,13 @@ cargo build --release
 
 The executable ends up in `target/release/swift-explorer.exe` on Windows and `target/release/swift-explorer` on Linux.
 
+## Translations
+
+Each language is one file in [`src/i18n/`](src/i18n). To add one, copy `de.rs`, translate the second string on every line, then add a `mod` line and entries in `LANGS`, `tables()` and `system_lang()` in [`src/i18n.rs`](src/i18n.rs). The [German commit](../../commits/main/src/i18n/de.rs) shows every change needed. Fixes to the existing translations are welcome too; native speakers haven't checked them yet.
+
 ## Settings
 
-Settings are stored in `%APPDATA%\SwiftExplorer\config.json` on Windows and `~/.config/SwiftExplorer/config.json` on Linux. Setting the `SWIFT_EXPLORER_LANG` environment variable to `en` or `tr` overrides the language setting.
+Settings are stored in `%APPDATA%\SwiftExplorer\config.json` on Windows and `~/.config/SwiftExplorer/config.json` on Linux. Setting the `SWIFT_EXPLORER_LANG` environment variable to a language code (`en`, `tr`, `de`, `es`, `fr`, `pt`, `ru`, `zh`, `ja`) overrides the language setting.
 
 ## Known limitations
 
