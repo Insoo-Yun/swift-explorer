@@ -41,6 +41,16 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.4.0" date="2026-10-16">
+      <description>
+        <p>Seven new interface languages.</p>
+        <ul>
+          <li>German, Spanish, French, Brazilian Portuguese, Russian, Simplified Chinese and Japanese, picked from the system language or from View &gt; Language.</li>
+          <li>Chinese, Japanese and Korean file names display with the system's CJK fonts.</li>
+          <li>The keyboard shortcuts window shows the version and a link to the project page.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-10-16">
       <description>
         <p>Flatpak package, an install script for Linux, and faster startup.</p>
