@@ -3845,7 +3845,13 @@ impl App {
                         });
                     });
                     ui.add_space(8.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.button(crate::i18n::t("Kapat")).clicked()).inner
+                    ui.horizontal(|ui| {
+                        // Sürüm ve hata bildirmek, güncelleme bakmak için proje sayfası
+                        ui.label(RichText::new(format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION"))).weak());
+                        ui.hyperlink_to("GitHub", env!("CARGO_PKG_REPOSITORY"));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.button(crate::i18n::t("Kapat")).clicked()).inner
+                    })
+                    .inner
                 });
                 if resp.inner || resp.should_close() {
                     keep = false;
