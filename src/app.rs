@@ -4131,6 +4131,8 @@ impl eframe::App for App {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        #[cfg(feature = "screenshot")]
+        crate::screenshot::input_hook(raw);
         // OLE sürükleme / yerel menü fare bırakma olayını yuttu; egui'ye bildir
         if let Some(pos) = self.inject_release.take() {
             raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: raw.modifiers });

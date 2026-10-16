@@ -4,6 +4,8 @@
 //!
 //! `SWIFT_EXPLORER_SCREENSHOT_SIZE=1280x800` pencere boyutunu,
 //! `SWIFT_EXPLORER_SCREENSHOT_DELAY=4` beklenecek saniyeyi belirler.
+//! `SWIFT_EXPLORER_SCREENSHOT_INPUT=click:820,130;key:F1` görüntüden önce sırayla tıklar ve tuşa basar
+//! (bir menüyü ya da pencereyi açık göstermek için).
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -14,6 +16,9 @@ struct Shot {
     at: Instant,
     size: Option<egui::Vec2>,
     requested: bool,
+    input: Vec<String>,
+    next_input: Instant,
+    release: Option<egui::Event>,
 }
 
 static SHOT: Mutex<Option<Shot>> = Mutex::new(None);
@@ -25,7 +30,44 @@ pub fn init() {
         let (w, h) = s.split_once('x')?;
         Some(egui::vec2(w.parse().ok()?, h.parse().ok()?))
     });
-    *SHOT.lock().unwrap() = Some(Shot { path: path.into(), at: Instant::now() + Duration::from_secs_f32(delay), size, requested: false });
+    let input = std::env::var("SWIFT_EXPLORER_SCREENSHOT_INPUT").map(|s| s.split(';').rev().map(str::to_string).collect()).unwrap_or_default();
+    let now = Instant::now();
+    *SHOT.lock().unwrap() = Some(Shot {
+        path: path.into(),
+        at: now + Duration::from_secs_f32(delay),
+        size,
+        requested: false,
+        input,
+        next_input: now + Duration::from_millis(1500),
+        release: None,
+    });
+}
+
+/// `raw_input_hook`'tan çağrılır: sıradaki tıklamayı ya da tuşu ekler
+pub fn input_hook(raw: &mut egui::RawInput) {
+    let mut guard = SHOT.lock().unwrap();
+    let Some(shot) = guard.as_mut() else { return };
+    if let Some(e) = shot.release.take() {
+        raw.events.push(e);
+        return;
+    }
+    if Instant::now() < shot.next_input {
+        return;
+    }
+    let Some(action) = shot.input.pop() else { return };
+    shot.next_input = Instant::now() + Duration::from_millis(500);
+    let modifiers = egui::Modifiers::NONE;
+    if let Some(pos) = action.strip_prefix("click:").and_then(|p| {
+        let (x, y) = p.split_once(',')?;
+        Some(egui::pos2(x.parse().ok()?, y.parse().ok()?))
+    }) {
+        raw.events.push(egui::Event::PointerMoved(pos));
+        raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+        shot.release = Some(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    } else if let Some(key) = action.strip_prefix("key:").and_then(egui::Key::from_name) {
+        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        shot.release = Some(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    }
 }
 
 /// Her karede çağrılır
