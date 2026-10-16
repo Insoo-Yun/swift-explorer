@@ -5,6 +5,7 @@
 mod de;
 mod es;
 mod fr;
+mod pt;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -19,6 +20,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("de", "Deutsch"),
     ("es", "Español"),
     ("fr", "Français"),
+    ("pt", "Português (Brasil)"),
 ];
 
 const EN: usize = 1;
@@ -34,6 +36,7 @@ pub fn lang_code() -> &'static str {
     LANGS[LANG.load(Relaxed)].0
 }
 
+/// "de", "pt_BR.UTF-8", "zh-CN" gibi bir dil kodunun `LANGS` içindeki sırası
 pub fn lang_index(code: &str) -> Option<usize> {
     let code = code.to_ascii_lowercase();
     LANGS.iter().position(|(c, _)| code.starts_with(c))
@@ -55,6 +58,7 @@ pub fn system_lang() -> usize {
         (0x07, _) => "de",
         (0x0A, _) => "es",
         (0x0C, _) => "fr",
+        (0x16, _) => "pt",
         _ => "en",
     };
     lang_index(code).unwrap_or(EN)
@@ -63,7 +67,7 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE];
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE, pt::TABLE];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
@@ -120,6 +124,7 @@ fn singular(s: String) -> String {
         "de" => &[("1 Elemente", "1 Element")],
         "es" => &[("1 elementos seleccionados", "1 elemento seleccionado"), ("1 elementos", "1 elemento")],
         "fr" => &[("1 éléments sélectionnés", "1 élément sélectionné"), ("1 éléments", "1 élément")],
+        "pt" => &[("1 itens selecionados", "1 item selecionado"), ("1 itens", "1 item")],
         _ => return s,
     };
     rules.iter().fold(s, |s, (many, one)| replace_count(s, many, one))
@@ -425,6 +430,7 @@ mod tests {
     #[test]
     fn locale_codes() {
         assert_eq!(lang_index("en_US.UTF-8"), Some(1));
+        assert_eq!(lang_index("pt_BR.UTF-8"), Some(5));
         assert_eq!(lang_index("C.UTF-8"), None);
     }
 }
