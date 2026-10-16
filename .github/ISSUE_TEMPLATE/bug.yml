@@ -1,0 +1,23 @@
+name: Bug report
+description: Something works differently from File Explorer, or doesn't work at all
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: What you did, what you expected (what File Explorer does), and what Swift Explorer did instead.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Version
+      description: Shown at the bottom of the keyboard shortcuts window (F1).
+      placeholder: "0.4.0"
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: System
+      placeholder: "Windows 11 24H2 / Ubuntu 24.04 with GNOME on Wayland"
+    validations:
+      required: true
