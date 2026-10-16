@@ -3894,6 +3894,8 @@ fn resize_edges(ctx: &egui::Context) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(feature = "screenshot")]
+        crate::screenshot::tick(ctx);
         #[cfg(not(windows))]
         let _ = frame;
         #[cfg(not(windows))]

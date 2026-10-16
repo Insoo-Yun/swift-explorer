@@ -4,6 +4,8 @@ mod app;
 mod fsutil;
 mod i18n;
 mod images;
+#[cfg(feature = "screenshot")]
+mod screenshot;
 mod tab;
 #[cfg_attr(not(windows), path = "shell_unix.rs")]
 mod shell;
@@ -36,5 +38,7 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     shell::begin_startup_cloak();
     app::prefetch_startup(start.clone());
+    #[cfg(feature = "screenshot")]
+    screenshot::init();
     eframe::run_native(APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, start)))))
 }
