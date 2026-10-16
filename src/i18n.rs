@@ -4,6 +4,7 @@
 
 mod de;
 mod es;
+mod fr;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -17,6 +18,7 @@ pub const LANGS: &[(&str, &str)] = &[
     ("en", "English"),
     ("de", "Deutsch"),
     ("es", "Español"),
+    ("fr", "Français"),
 ];
 
 const EN: usize = 1;
@@ -52,6 +54,7 @@ pub fn system_lang() -> usize {
         (0x1F, _) => "tr",
         (0x07, _) => "de",
         (0x0A, _) => "es",
+        (0x0C, _) => "fr",
         _ => "en",
     };
     lang_index(code).unwrap_or(EN)
@@ -60,7 +63,7 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE];
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
@@ -116,6 +119,7 @@ fn singular(s: String) -> String {
         "en" => &[("1 items", "1 item")],
         "de" => &[("1 Elemente", "1 Element")],
         "es" => &[("1 elementos seleccionados", "1 elemento seleccionado"), ("1 elementos", "1 elemento")],
+        "fr" => &[("1 éléments sélectionnés", "1 élément sélectionné"), ("1 éléments", "1 élément")],
         _ => return s,
     };
     rules.iter().fold(s, |s, (many, one)| replace_count(s, many, one))
