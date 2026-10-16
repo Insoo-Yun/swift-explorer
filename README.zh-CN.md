@@ -29,6 +29,8 @@ Linux 的安装方法见[英文 README](README.md#download)。
 - 复制、剪切、粘贴和拖放可与资源管理器及桌面双向互通。
 - Shift + 右键打开完整的 Windows 右键菜单，7-Zip、WinRAR 和“发送到”都在其中。
 - Ctrl+Z 可撤消重命名、移动、复制以及删除到回收站。
+- “查看 > 主题”中除了系统、浅色、深色，还有 Catppuccin、Gruvbox、Everforest、Nord、Dracula、Tokyo Night、Rosé Pine 和 Solarized。
+- 复制和移动要等文件真正写入磁盘后才算完成，相当于在终端里执行 `sync`。进度条消失后就可以拔出 U 盘。移动到其他驱动器时，原文件也是在此之后才删除。
 - 中文、日文和韩文文件名使用系统的 CJK 字体正常显示。
 - 界面语言：简体中文、English、Türkçe、Deutsch、Español、Français、Português (Brasil)、Русский、日本語。默认跟随 Windows 显示语言，可在“查看 > 语言”中更改。
 

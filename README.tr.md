@@ -41,6 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
 - Shift + sağ tık Windows'un tam sağ tık menüsünü açar; 7-Zip, WinRAR ve Gönder orada.
 - Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.
+- Görünüm > Tema altında Sistem, Açık ve Koyu'nun yanında Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine ve Solarized var.
+- Kopyalama ve taşıma, dosyalar diske yazılmadan bitmiş sayılmaz. Terminalde `sync` çalıştırmak gibi. İlerleme çubuğu kaybolunca USB bellek çıkarılabilir. Başka sürücüye taşırken asıl dosyalar ancak bundan sonra silinir.
 - Hedefte aynı adlı dosya varsa değiştirmek, atlamak ya da ikisini de saklamak arasında seçim sorar.
 - Diskteki değişiklikler açık klasörde anında görünür.
 - İndirilenler, Explorer'daki gibi değiştirme tarihine göre gruplanır (Bugün, Dün, Geçen hafta…). Diğer klasörler Sırala > Grupla'dan gruplanabilir.

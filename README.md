@@ -41,6 +41,8 @@ Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with 
 - Copy, cut, paste and drag and drop work in both directions with Explorer and the desktop.
 - Shift + right-click opens the full Windows context menu, so 7-Zip, WinRAR and Send to are there.
 - Ctrl+Z undoes renames, moves, copies and deletes to the Recycle Bin.
+- Besides System, Light and Dark, View > Theme has Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine and Solarized.
+- A copy or move counts as done only after the files are written to the disk, like running `sync` in a terminal. Once the progress bar is gone, a USB stick can be pulled out. When moving to another drive, the originals are deleted only after that.
 - When a file with the same name already exists, it asks whether to replace, skip or keep both.
 - Folders update live when files change on disk.
 - Downloads is grouped by date modified (Today, Yesterday, Last week…), like in Explorer. Other folders can be grouped from Sort > Group by.
