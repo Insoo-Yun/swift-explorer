@@ -2,6 +2,7 @@
 //! diğer diller `i18n/` altında, her biri aynı anahtarlarla ayrı bir dosyada.
 //! Dil, işletim sisteminin arayüz diline göre seçilir; Görünüm menüsünden değiştirilebilir.
 
+mod de;
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -13,6 +14,7 @@ use std::sync::OnceLock;
 pub const LANGS: &[(&str, &str)] = &[
     ("tr", "Türkçe"),
     ("en", "English"),
+    ("de", "Deutsch"),
 ];
 
 const EN: usize = 1;
@@ -46,6 +48,7 @@ pub fn system_lang() -> usize {
     let lang = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
     let code = match (lang & 0x3FF, lang) {
         (0x1F, _) => "tr",
+        (0x07, _) => "de",
         _ => "en",
     };
     lang_index(code).unwrap_or(EN)
@@ -54,7 +57,7 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE];
+        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
@@ -108,6 +111,7 @@ pub fn tf(key: &str, args: &[&dyn Display]) -> String {
 fn singular(s: String) -> String {
     let rules: &[(&str, &str)] = match lang_code() {
         "en" => &[("1 items", "1 item")],
+        "de" => &[("1 Elemente", "1 Element")],
         _ => return s,
     };
     rules.iter().fold(s, |s, (many, one)| replace_count(s, many, one))
