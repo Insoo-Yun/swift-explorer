@@ -29,7 +29,7 @@ use windows::Win32::UI::Shell::{
     SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, GetCursorPos, GetWindowRect, IsZoomed, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
+    CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
     HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_SHOWNORMAL, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT,
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, HHOOK, WH_CBT, WS_CHILD,
@@ -418,14 +418,16 @@ pub fn drag_out(paths: &[PathBuf]) -> bool {
     }
 }
 
+/// İmleç bizim pencerenin görünen bir parçasında değilse true döner. Pencerenin
+/// üstündeki başka bir uygulama, örneğin sürüklerken Alt+Tab ile öne gelen, de sayılır.
 pub fn cursor_outside_window(hwnd: isize) -> bool {
     unsafe {
         let mut pt = POINT::default();
-        let mut r = RECT::default();
-        if GetCursorPos(&mut pt).is_err() || GetWindowRect(HWND(hwnd as *mut c_void), &mut r).is_err() {
+        if GetCursorPos(&mut pt).is_err() {
             return false;
         }
-        pt.x < r.left || pt.x >= r.right || pt.y < r.top || pt.y >= r.bottom
+        let under = WindowFromPoint(pt);
+        under.is_invalid() || GetAncestor(under, GA_ROOT) != HWND(hwnd as *mut c_void)
     }
 }
 
