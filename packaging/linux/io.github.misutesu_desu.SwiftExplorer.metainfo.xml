@@ -41,6 +41,17 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.5.0" date="2026-10-17">
+      <description>
+        <p>Color schemes, and copies that are safe to unplug when they finish.</p>
+        <ul>
+          <li>View &gt; Theme has Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine and Solarized.</li>
+          <li>A copy or move finishes only after the files reach the disk, and a message says when the drive can be removed.</li>
+          <li>Moving to another drive deletes the originals only after that.</li>
+          <li>On Windows, files can be dragged onto a window that sits on top of Swift Explorer or was brought forward with Alt+Tab.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-10-16">
       <description>
         <p>Japanese text lines up with Latin letters in file names and labels.</p>
