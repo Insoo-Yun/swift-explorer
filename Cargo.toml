@@ -1,6 +1,6 @@
 [package]
 name = "swift-explorer"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "A file manager for Windows and Linux that looks and works like the Windows 11 File Explorer"
 license = "MIT"
