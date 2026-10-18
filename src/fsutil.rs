@@ -58,6 +58,7 @@ pub struct Entry {
     pub is_dir: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
+    pub created: Option<SystemTime>,
     pub hidden: bool,
     pub ext: String,
     /// Sıradan klasör: ikonu standart klasör ikonudur, tüm bu klasörler tek ikonu paylaşır.
@@ -86,6 +87,7 @@ impl Entry {
             is_dir,
             size: if is_dir { 0 } else { md.len() },
             modified: md.modified().ok(),
+            created: md.created().ok(),
             hidden: is_hidden_attr(attrs),
             ext,
             plain_dir: cfg!(windows) && is_dir && attrs & (ATTR_READONLY | ATTR_SYSTEM | ATTR_REPARSE) == 0,

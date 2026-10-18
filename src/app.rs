@@ -3727,8 +3727,8 @@ impl App {
                     row(crate::i18n::t("Boyut"), fsutil::format_size(*s));
                 }
                 row(crate::i18n::t("Değiştirme"), fsutil::format_time(e.modified));
-                if let Ok(md) = std::fs::metadata(&e.path) {
-                    row(crate::i18n::t("Oluşturma"), fsutil::format_time(md.created().ok()));
+                if e.created.is_some() {
+                    row(crate::i18n::t("Oluşturma"), fsutil::format_time(e.created));
                 }
                 row(crate::i18n::t("Konum"), e.path.parent().map(|p| p.display().to_string()).unwrap_or_default());
             });
