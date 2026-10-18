@@ -202,3 +202,140 @@ pub fn clipboard_get_files() -> Option<(Vec<PathBuf>, bool)> {
     }
     Some((files, cut))
 }
+
+// ---------- Arka planda bekleme: Explorer gibi anında açılmak için ----------
+//
+// Pencere ve OpenGL sürücüsünün açılışı bu uygulamanın kendi açılışından katbekat uzun
+// sürüyor; hibrit grafikli dizüstülerde bir saniyeyi geçiyor. Bu yüzden pencere kapanınca
+// süreç gizlenip bekler, sonraki açılış ona devredilir ve pencere hemen görünür.
+
+use std::ffi::OsString;
+use std::io::{Read, Write};
+use std::os::windows::ffi::OsStringExt;
+use std::os::windows::io::FromRawHandle;
+use std::sync::atomic::{AtomicIsize, Ordering::SeqCst};
+use std::sync::Mutex;
+
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
+use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, WaitNamedPipeW, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT};
+use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, IsIconic, SetForegroundWindow, ShowWindow, ASFW_ANY, SW_HIDE, SW_RESTORE, SW_SHOW};
+
+/// Gizlenip bekleyen pencere; 0 ise pencere açık ya da bekleme kapalı
+static PARKED: AtomicIsize = AtomicIsize::new(0);
+/// Devralınan açılış isteği: açılacak klasör (yoksa son sekmeler)
+static REOPEN: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
+
+/// Aynı oturumdaki aynı kullanıcıya özel boru adı
+fn pipe_name() -> Vec<u16> {
+    let mut session = 0;
+    unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    wide(OsStr::new(&format!(r"\\.\pipe\SwiftExplorer-{session}-{user}")))
+}
+
+/// Gizlenip bekleyen bir süreç varsa açılışı ona devreder. `true` dönerse pencere
+/// o süreçte açıldı, bu süreç çıkabilir.
+pub fn hand_off(start: Option<&Path>) -> bool {
+    let name = pipe_name();
+    let path = OsString::from_wide(&name[..name.len() - 1]);
+    let mut pipe = None;
+    for _ in 0..3 {
+        match std::fs::OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(f) => {
+                pipe = Some(f);
+                break;
+            }
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => unsafe {
+                WaitNamedPipeW(name.as_ptr(), 200);
+            },
+            Err(_) => return false,
+        }
+    }
+    let Some(mut pipe) = pipe else { return false };
+    let dir: Vec<u16> = start.and_then(|p| std::path::absolute(p).ok()).map(|p| p.as_os_str().encode_wide().collect()).unwrap_or_default();
+    let mut msg = ((dir.len() * 2) as u32).to_le_bytes().to_vec();
+    msg.extend(dir.iter().flat_map(|c| c.to_le_bytes()));
+    // Kullanıcının başlattığı süreç öne çıkma hakkına sahip; bekleyen sürece devreder
+    unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+    let mut ok = [0u8];
+    pipe.write_all(&msg).and_then(|_| pipe.read_exact(&mut ok)).is_ok() && ok[0] == 1
+}
+
+fn create_pipe(name: &[u16], first: bool) -> HANDLE {
+    let mode = PIPE_ACCESS_DUPLEX | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
+    unsafe { CreateNamedPipeW(name.as_ptr(), mode, PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, PIPE_UNLIMITED_INSTANCES, 512, 512, 0, std::ptr::null()) }
+}
+
+/// Sonraki açılışları dinler. Boruyu başka bir süreç tutuyorsa `false` döner;
+/// o zaman bu pencere kapanınca süreç de kapanır.
+pub fn serve(ctx: egui::Context) -> bool {
+    let name = pipe_name();
+    let first = create_pipe(&name, true);
+    if first == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    // HANDLE ham işaretçi, iş parçacığına sayı olarak geçer
+    let first = first as isize;
+    std::thread::spawn(move || {
+        let mut h = first as HANDLE;
+        loop {
+            let connected = unsafe { ConnectNamedPipe(h, std::ptr::null_mut()) } != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+            // Bu istek işlenirken gelen açılış "boru yok" görüp ayrı süreç başlatmasın
+            let next = create_pipe(&name, false);
+            if connected {
+                answer(unsafe { std::fs::File::from_raw_handle(h) }, &ctx);
+            } else {
+                unsafe { CloseHandle(h) };
+            }
+            if next == INVALID_HANDLE_VALUE {
+                return;
+            }
+            h = next;
+        }
+    });
+    true
+}
+
+fn answer(mut pipe: std::fs::File, ctx: &egui::Context) {
+    let mut len = [0u8; 4];
+    if pipe.read_exact(&mut len).is_err() {
+        return;
+    }
+    let len = u32::from_le_bytes(len) as usize;
+    if len > 64 * 1024 {
+        return;
+    }
+    let mut buf = vec![0u8; len];
+    if pipe.read_exact(&mut buf).is_err() {
+        return;
+    }
+    let dir: Vec<u16> = buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let hwnd = PARKED.swap(0, SeqCst);
+    if hwnd != 0 {
+        *REOPEN.lock().unwrap() = Some((!dir.is_empty()).then(|| PathBuf::from(OsString::from_wide(&dir))));
+        // İlk kare eski içeriği göstermesin; arayüz yeni içerik hazır olunca açar
+        crate::shell::set_cloak(hwnd, true);
+        let h = hwnd as windows_sys::Win32::Foundation::HWND;
+        unsafe {
+            ShowWindow(h, if IsIconic(h) != 0 { SW_RESTORE } else { SW_SHOW });
+            SetForegroundWindow(h);
+        }
+        ctx.request_repaint();
+    }
+    // Pencere açıksa reddedilir; yeni açılış kendi penceresini açar
+    let _ = pipe.write_all(&[(hwnd != 0) as u8]);
+    let _ = pipe.sync_all();
+}
+
+/// Pencereyi gizler ve sonraki açılışı bekler
+pub fn park(hwnd: isize) {
+    unsafe { ShowWindow(hwnd as windows_sys::Win32::Foundation::HWND, SW_HIDE) };
+    PARKED.store(hwnd, SeqCst);
+}
+
+/// Gizliyken gelen açılış isteği
+pub fn take_reopen() -> Option<Option<PathBuf>> {
+    REOPEN.lock().unwrap().take()
+}

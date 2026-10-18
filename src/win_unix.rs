@@ -240,3 +240,19 @@ pub fn clipboard_get_files() -> Option<(Vec<PathBuf>, bool)> {
     }
     (!files.is_empty()).then_some((files, cut))
 }
+
+// ---------- Arka planda bekleme yalnızca Windows'ta; burada her açılış yeni süreçtir
+
+pub fn hand_off(_start: Option<&Path>) -> bool {
+    false
+}
+
+pub fn serve(_ctx: egui::Context) -> bool {
+    false
+}
+
+pub fn park(_hwnd: isize) {}
+
+pub fn take_reopen() -> Option<Option<PathBuf>> {
+    None
+}

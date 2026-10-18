@@ -21,6 +21,9 @@ pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
 fn main() -> eframe::Result<()> {
     let start = std::env::args().nth(1).map(PathBuf::from);
+    if win::hand_off(start.as_deref()) {
+        return Ok(());
+    }
     // İlk çalıştırmada (kayıtlı pencere konumu yoksa) ekranı kaplayarak aç
     let first_run = eframe::storage_dir(APP_NAME).is_none_or(|d| !d.join("app.ron").exists());
     let options = eframe::NativeOptions {

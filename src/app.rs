@@ -44,6 +44,8 @@ struct Config {
     tips_dismissed: bool,
     /// "Değiştirme tarihi"ne göre gruplanan klasörler (Explorer'da İndirilenler varsayılan olarak böyle)
     grouped: Vec<PathBuf>,
+    /// Pencere kapanınca süreç gizlenip bekler, sonraki açılış anında olur (Windows)
+    background: bool,
 }
 
 impl Default for Config {
@@ -63,6 +65,7 @@ impl Default for Config {
             recent: vec![],
             tips_dismissed: false,
             grouped: dirs::download_dir().into_iter().collect(),
+            background: true,
         }
     }
 }
@@ -238,6 +241,9 @@ pub struct App {
     recent: Vec<PathBuf>,
     tips_dismissed: bool,
     grouped: Vec<PathBuf>,
+    background: bool,
+    /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
+    resident: bool,
     /// Bilinen klasörler (Masaüstü, İndirilenler…) — açılışta bir kez
     known: Vec<(&'static str, &'static str, PathBuf)>,
     /// Gezinti bölmesinde açık düğümler
@@ -1006,6 +1012,8 @@ impl App {
             recent: cfg.recent,
             tips_dismissed: cfg.tips_dismissed,
             grouped: cfg.grouped,
+            background: cfg.background,
+            resident: win::serve(ctx.clone()),
             known: known_folders(),
             tree_open: Default::default(),
             drives: Arc::new(Mutex::new(vec![])),
@@ -1067,6 +1075,7 @@ impl App {
             recent: self.recent.clone(),
             tips_dismissed: self.tips_dismissed,
             grouped: self.grouped.clone(),
+            background: self.background,
         };
         if let Some(p) = config_path() {
             if let Some(d) = p.parent() {
@@ -1126,6 +1135,28 @@ impl App {
 
     fn tab(&mut self) -> &mut Tab {
         &mut self.tabs[self.active]
+    }
+
+    /// Kapatma: pencere gizlenir, süreç sonraki açılışı bekler
+    fn park(&mut self, hwnd: isize) {
+        self.renaming = None;
+        self.save_config();
+        win::park(hwnd);
+    }
+
+    /// Gizliyken gelen açılış. Klasörle açıldıysa o sekmeye geçer, yoksa yeni sekmede açar.
+    fn reopen(&mut self, start: Option<PathBuf>) {
+        // Pencere yeni içerik hazır olana dek gizli kalsın, açılıştaki gibi
+        self.revealed = false;
+        self.frames = 0;
+        self.started = Instant::now();
+        if let Some(p) = start.map(|p| normalize(&p)).filter(|p| crate::tab::is_virtual(p) || p.is_dir()) {
+            match self.tabs.iter().position(|t| t.path == p) {
+                Some(i) => self.active = i,
+                None => self.apply(Action::NewTab(p)),
+            }
+        }
+        self.refresh_drives();
     }
 
     fn toast(&mut self, msg: impl Into<String>, error: bool) {
@@ -4060,6 +4091,16 @@ impl eframe::App for App {
                     // GL yüzeyini almadığından bir kare beyaz parlar. Hazır olana dek gizle.
                     shell::set_cloak(hwnd, true);
                 }
+            }
+        }
+
+        if let Some(start) = win::take_reopen() {
+            self.reopen(start);
+        }
+        if self.resident && self.background && ctx.input(|i| i.viewport().close_requested()) {
+            if let Some(hwnd) = self.hwnd {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.park(hwnd);
             }
         }
 
