@@ -2179,7 +2179,8 @@ impl App {
                 let p = PathBuf::from(&text);
                 (p.parent().map(Path::to_path_buf).unwrap_or_default(), p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default())
             };
-            if field.has_focus() && !dir.as_os_str().is_empty() && dir.is_dir() {
+            // Klasör değilse arka plandaki okuma boş liste döner; burada diske sorulmaz, ağ yolunda takılmasın
+            if field.has_focus() && !dir.as_os_str().is_empty() {
                 let subs = self.subdirs_cached(&dir);
                 let matches: Vec<PathBuf> = subs.iter().filter(|p| path_label(p).to_lowercase().starts_with(&prefix)).take(12).cloned().collect();
                 if !matches.is_empty() && !(matches.len() == 1 && path_label(&matches[0]).to_lowercase() == prefix) {
