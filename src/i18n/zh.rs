@@ -78,6 +78,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Dosya adı uzantıları", "文件扩展名"),
     ("Anında açılış için arka planda bekle", "在后台等待以便即时打开"),
     ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "关闭窗口后应用会隐藏并保持就绪。安装新版本前请关闭此选项并关闭窗口。"),
+    ("Oturum açılınca arka planda başlat", "登录时在后台启动"),
     ("Tema", "主题"),
     ("Sistem", "系统"),
     ("Açık", "浅色"),

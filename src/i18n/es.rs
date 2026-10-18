@@ -78,6 +78,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Dosya adı uzantıları", "Extensiones de nombre de archivo"),
     ("Anında açılış için arka planda bekle", "Esperar en segundo plano para abrir al instante"),
     ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "Al cerrar la ventana, la aplicación se oculta y queda lista. Desactívalo y cierra la ventana antes de instalar una versión nueva."),
+    ("Oturum açılınca arka planda başlat", "Iniciar en segundo plano al iniciar sesión"),
     ("Tema", "Tema"),
     ("Sistem", "Sistema"),
     ("Açık", "Claro"),

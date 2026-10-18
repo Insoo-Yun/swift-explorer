@@ -20,8 +20,10 @@ pub const APP_NAME: &str = "Swift Explorer";
 pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
 fn main() -> eframe::Result<()> {
-    let start = std::env::args().nth(1).map(PathBuf::from);
-    if win::hand_off(start.as_deref()) {
+    let arg = std::env::args().nth(1);
+    let hidden = arg.as_deref() == Some(win::BACKGROUND_ARG);
+    let start = arg.filter(|_| !hidden).map(PathBuf::from);
+    if hidden && win::is_serving() || !hidden && win::hand_off(start.as_deref()) {
         return Ok(());
     }
     // İlk çalıştırmada (kayıtlı pencere konumu yoksa) ekranı kaplayarak aç
@@ -29,6 +31,8 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_maximized(first_run)
+            // Oturum açılışında gizli başlarken kullanıcının penceresinden odağı almasın
+            .with_active(!hidden)
             .with_title(APP_NAME)
             .with_app_id(APP_ID)
             // Başlık çubuğu yok: sekmeler ve pencere düğmeleri Explorer gibi en üstte
@@ -44,5 +48,5 @@ fn main() -> eframe::Result<()> {
     app::prefetch_startup(start.clone());
     #[cfg(feature = "screenshot")]
     screenshot::init();
-    eframe::run_native(APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, start)))))
+    eframe::run_native(APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, start, hidden)))))
 }

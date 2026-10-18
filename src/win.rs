@@ -238,22 +238,7 @@ fn pipe_name() -> Vec<u16> {
 /// Gizlenip bekleyen bir süreç varsa açılışı ona devreder. `true` dönerse pencere
 /// o süreçte açıldı, bu süreç çıkabilir.
 pub fn hand_off(start: Option<&Path>) -> bool {
-    let name = pipe_name();
-    let path = OsString::from_wide(&name[..name.len() - 1]);
-    let mut pipe = None;
-    for _ in 0..3 {
-        match std::fs::OpenOptions::new().read(true).write(true).open(&path) {
-            Ok(f) => {
-                pipe = Some(f);
-                break;
-            }
-            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => unsafe {
-                WaitNamedPipeW(name.as_ptr(), 200);
-            },
-            Err(_) => return false,
-        }
-    }
-    let Some(mut pipe) = pipe else { return false };
+    let Some(mut pipe) = connect() else { return false };
     let dir: Vec<u16> = start.and_then(|p| std::path::absolute(p).ok()).map(|p| p.as_os_str().encode_wide().collect()).unwrap_or_default();
     let mut msg = ((dir.len() * 2) as u32).to_le_bytes().to_vec();
     msg.extend(dir.iter().flat_map(|c| c.to_le_bytes()));
@@ -261,6 +246,26 @@ pub fn hand_off(start: Option<&Path>) -> bool {
     unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     let mut ok = [0u8];
     pipe.write_all(&msg).and_then(|_| pipe.read_exact(&mut ok)).is_ok() && ok[0] == 1
+}
+
+/// Sonraki açılışları dinleyen bir süreç var mı (pencere açık ya da gizli)
+pub fn is_serving() -> bool {
+    connect().is_some()
+}
+
+fn connect() -> Option<std::fs::File> {
+    let name = pipe_name();
+    let path = OsString::from_wide(&name[..name.len() - 1]);
+    for _ in 0..3 {
+        match std::fs::OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(f) => return Some(f),
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => unsafe {
+                WaitNamedPipeW(name.as_ptr(), 200);
+            },
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 fn create_pipe(name: &[u16], first: bool) -> HANDLE {
@@ -338,4 +343,33 @@ pub fn park(hwnd: isize) {
 /// Gizliyken gelen açılış isteği
 pub fn take_reopen() -> Option<Option<PathBuf>> {
     REOPEN.lock().unwrap().take()
+}
+
+// ---------- Oturum açılınca arka planda başlama: bilgisayar açıldıktan sonraki ilk açılış da anında olsun
+
+/// Bu bayrakla başlayan süreç pencere göstermeden bekler
+pub const BACKGROUND_ARG: &str = "--background";
+
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const RUN_VALUE: &str = "SwiftExplorer";
+
+pub fn autostart() -> bool {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    let (key, value) = (wide(OsStr::new(RUN_KEY)), wide(OsStr::new(RUN_VALUE)));
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 }
+}
+
+pub fn set_autostart(on: bool) {
+    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    let (key, value) = (wide(OsStr::new(RUN_KEY)), wide(OsStr::new(RUN_VALUE)));
+    if !on {
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let mut cmd = OsString::from("\"");
+    cmd.push(exe.as_os_str());
+    cmd.push(format!("\" {BACKGROUND_ARG}"));
+    let data = wide(&cmd);
+    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) };
 }

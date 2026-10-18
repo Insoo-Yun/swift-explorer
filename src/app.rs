@@ -244,6 +244,10 @@ pub struct App {
     background: bool,
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
+    autostart: bool,
+    /// Oturum açılışında başladı: pencere hiç gösterilmeden beklemeye geçer
+    #[cfg_attr(not(windows), allow(dead_code))]
+    start_hidden: bool,
     /// Bilinen klasörler (Masaüstü, İndirilenler…) — açılışta bir kez
     known: Vec<(&'static str, &'static str, PathBuf)>,
     /// Gezinti bölmesinde açık düğümler
@@ -982,7 +986,7 @@ fn drop_target(ui: &egui::Ui, resp: &egui::Response, target: &Path, accent: Colo
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>) -> App {
+    pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>, hidden: bool) -> App {
         let ctx = cc.egui_ctx.clone();
         setup_fonts(&ctx);
 
@@ -1014,6 +1018,8 @@ impl App {
             grouped: cfg.grouped,
             background: cfg.background,
             resident: win::serve(ctx.clone()),
+            autostart: win::autostart(),
+            start_hidden: hidden,
             known: known_folders(),
             tree_open: Default::default(),
             drives: Arc::new(Mutex::new(vec![])),
@@ -1124,6 +1130,17 @@ impl App {
         self.frames += 1;
         let ready = !self.tabs[self.active].is_loading() && !self.images.busy();
         if self.frames >= 2 && (ready || self.started.elapsed() >= Duration::from_millis(350)) {
+            if std::mem::take(&mut self.start_hidden) {
+                shell::end_startup_cloak();
+                crate::images::end_prefetch();
+                self.revealed = true;
+                if self.resident {
+                    self.park(hwnd);
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                return;
+            }
             shell::set_cloak(hwnd, false);
             shell::end_startup_cloak();
             crate::images::end_prefetch();
@@ -2429,8 +2446,20 @@ impl App {
                 }
                 ui.checkbox(&mut self.show_ext, crate::i18n::t("Dosya adı uzantıları"));
                 if cfg!(windows) {
-                    ui.checkbox(&mut self.background, crate::i18n::t("Anında açılış için arka planda bekle"))
+                    let r = ui
+                        .checkbox(&mut self.background, crate::i18n::t("Anında açılış için arka planda bekle"))
                         .on_hover_text(crate::i18n::t("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın."));
+                    if r.changed() && !self.background && self.autostart {
+                        win::set_autostart(false);
+                        self.autostart = win::autostart();
+                    }
+                    ui.add_enabled_ui(self.background, |ui| {
+                        let mut on = self.autostart;
+                        if ui.checkbox(&mut on, crate::i18n::t("Oturum açılınca arka planda başlat")).changed() {
+                            win::set_autostart(on);
+                            self.autostart = win::autostart();
+                        }
+                    });
                 }
                 ui.separator();
                 ui.label(RichText::new(crate::i18n::t("Tema")).weak());

@@ -237,6 +237,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Dosya adı uzantıları", "File name extensions"),
     ("Anında açılış için arka planda bekle", "Wait in the background for instant startup"),
     ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "Closing the window hides the app and keeps it ready. Turn this off and close the window before installing a new version."),
+    ("Oturum açılınca arka planda başlat", "Start in the background when signing in"),
     ("Tema", "Theme"),
     ("Sistem", "System"),
     ("Açık", "Light"),

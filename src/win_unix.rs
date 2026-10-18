@@ -256,3 +256,15 @@ pub fn park(_hwnd: isize) {}
 pub fn take_reopen() -> Option<Option<PathBuf>> {
     None
 }
+
+pub fn is_serving() -> bool {
+    false
+}
+
+pub const BACKGROUND_ARG: &str = "--background";
+
+pub fn autostart() -> bool {
+    false
+}
+
+pub fn set_autostart(_on: bool) {}
