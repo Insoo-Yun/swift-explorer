@@ -235,6 +235,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+P)", "Details pane (Alt+P)"),
     ("Gizli öğeler (Ctrl+H)", "Hidden items (Ctrl+H)"),
     ("Dosya adı uzantıları", "File name extensions"),
+    ("Anında açılış için arka planda bekle", "Wait in the background for instant startup"),
+    ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "Closing the window hides the app and keeps it ready. Turn this off and close the window before installing a new version."),
     ("Tema", "Theme"),
     ("Sistem", "System"),
     ("Açık", "Light"),

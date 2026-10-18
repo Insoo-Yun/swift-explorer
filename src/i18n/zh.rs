@@ -76,6 +76,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+P)", "详细信息窗格 (Alt+P)"),
     ("Gizli öğeler (Ctrl+H)", "隐藏的项目 (Ctrl+H)"),
     ("Dosya adı uzantıları", "文件扩展名"),
+    ("Anında açılış için arka planda bekle", "在后台等待以便即时打开"),
+    ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "关闭窗口后应用会隐藏并保持就绪。安装新版本前请关闭此选项并关闭窗口。"),
     ("Tema", "主题"),
     ("Sistem", "系统"),
     ("Açık", "浅色"),

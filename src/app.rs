@@ -2428,6 +2428,10 @@ impl App {
                     self.mark_views_dirty();
                 }
                 ui.checkbox(&mut self.show_ext, crate::i18n::t("Dosya adı uzantıları"));
+                if cfg!(windows) {
+                    ui.checkbox(&mut self.background, crate::i18n::t("Anında açılış için arka planda bekle"))
+                        .on_hover_text(crate::i18n::t("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın."));
+                }
                 ui.separator();
                 ui.label(RichText::new(crate::i18n::t("Tema")).weak());
                 let names = [crate::i18n::t("Sistem"), crate::i18n::t("Açık"), crate::i18n::t("Koyu")].into_iter().chain(scheme::SCHEMES.iter().map(|c| c.name));

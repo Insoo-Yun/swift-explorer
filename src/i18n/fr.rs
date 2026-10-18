@@ -76,6 +76,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+P)", "Volet des détails (Alt+P)"),
     ("Gizli öğeler (Ctrl+H)", "Éléments masqués (Ctrl+H)"),
     ("Dosya adı uzantıları", "Extensions de noms de fichiers"),
+    ("Anında açılış için arka planda bekle", "Attendre en arrière-plan pour s'ouvrir instantanément"),
+    ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "La fermeture de la fenêtre masque l'application, qui reste prête. Désactivez cette option et fermez la fenêtre avant d'installer une nouvelle version."),
     ("Tema", "Thème"),
     ("Sistem", "Système"),
     ("Açık", "Clair"),
