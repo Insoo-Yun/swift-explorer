@@ -43,6 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.
 - Görünüm > Tema altında Sistem, Açık ve Koyu'nun yanında Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine ve Solarized var.
 - Kopyalama ve taşıma, dosyalar diske yazılmadan bitmiş sayılmaz. Terminalde `sync` çalıştırmak gibi. İlerleme çubuğu kaybolunca USB bellek çıkarılabilir. Başka sürücüye taşırken asıl dosyalar ancak bundan sonra silinir.
+- Windows'ta pencere kapatılınca uygulama arka planda bekler. Yeniden açınca pencere, grafik sürücüsünün açılmasını beklemeden hemen gelir. Görünüm > Oturum açılınca arka planda başlat seçilirse bilgisayar açıldıktan sonraki ilk açılış da hızlı olur.
+- Windows'ta uygulama kendini günceller: yeni sürüm GitHub'dan indirilir, SHA-256 özetiyle doğrulanır ve pencere kapatılınca devreye girer. Scoop ile kurulduysa güncellemeyi `scoop update` yapar. Görünüm > Güncellemeleri otomatik yükle ile kapatılabilir.
 - Hedefte aynı adlı dosya varsa değiştirmek, atlamak ya da ikisini de saklamak arasında seçim sorar.
 - Diskteki değişiklikler açık klasörde anında görünür.
 - İndirilenler, Explorer'daki gibi değiştirme tarihine göre gruplanır (Bugün, Dün, Geçen hafta…). Diğer klasörler Sırala > Grupla'dan gruplanabilir.
@@ -62,7 +64,8 @@ Linux sürümü yeni ve Windows sürümü kadar denenmedi. Görünüm ve kısayo
 - Kopyalanan dosyalar panoya yol listesi olarak yazılır. Başka dosya yöneticilerinden kopyalanan yollar ve `file://` bağlantıları yapıştırılabilir; ters yönü çalışmayabilir.
 - Pencereden dışarı sürükleme henüz yok. Pencereye dosya bırakmak X11'de çalışır.
 - "Bu bilgisayar" sayfası `/` ve `/media`, `/run/media`, `/mnt` altına bağlanan diskleri gösterir.
-- Özellikler ve "Dosya yöneticisinde göster", D-Bus üzerinden dosya yöneticinizi kullanır (Nautilus, Dolphin, Nemo ve Thunar destekler).
+- Özellikler uygulamanın kendi penceresini açar. Genel, Güvenlik ve Ayrıntılar sekmelerinde izinler ve varsayılan uygulama değiştirilebilir.
+- "Dosya yöneticisinde göster", D-Bus üzerinden dosya yöneticinizi kullanır (Nautilus, Dolphin, Nemo ve Thunar destekler).
 
 ## Derleme
 

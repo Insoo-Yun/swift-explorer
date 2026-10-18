@@ -31,6 +31,8 @@ Linux 的安装方法见[英文 README](README.md#download)。
 - Ctrl+Z 可撤消重命名、移动、复制以及删除到回收站。
 - “查看 > 主题”中除了系统、浅色、深色，还有 Catppuccin、Gruvbox、Everforest、Nord、Dracula、Tokyo Night、Rosé Pine 和 Solarized。
 - 复制和移动要等文件真正写入磁盘后才算完成，相当于在终端里执行 `sync`。进度条消失后就可以拔出 U 盘。移动到其他驱动器时，原文件也是在此之后才删除。
+- 在 Windows 上关闭窗口后，应用会在后台等待，再次打开时窗口立即出现，不必等显卡驱动启动。勾选“查看 > 登录时在后台启动”后，开机后的第一次打开也很快。
+- 在 Windows 上应用会自动更新：新版本从 GitHub 下载，校验 SHA-256 后在关闭窗口时生效。通过 Scoop 安装时由 `scoop update` 负责更新。可在“查看 > 自动安装更新”中关闭。
 - 中文、日文和韩文文件名使用系统的 CJK 字体正常显示。
 - 界面语言：简体中文、English、Türkçe、Deutsch、Español、Français、Português (Brasil)、Русский、日本語。默认跟随 Windows 显示语言，可在“查看 > 语言”中更改。
 

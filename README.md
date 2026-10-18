@@ -43,6 +43,8 @@ Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with 
 - Ctrl+Z undoes renames, moves, copies and deletes to the Recycle Bin.
 - Besides System, Light and Dark, View > Theme has Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine and Solarized.
 - A copy or move counts as done only after the files are written to the disk, like running `sync` in a terminal. Once the progress bar is gone, a USB stick can be pulled out. When moving to another drive, the originals are deleted only after that.
+- On Windows, closing the window keeps the app waiting in the background, so opening it again shows the window right away instead of waiting for the graphics driver to start. With View > Start in the background when signing in, the first launch after a reboot is quick too.
+- On Windows the app updates itself: a new release is downloaded from GitHub, checked against its SHA-256 and takes over once the window is closed. Scoop installs are left to `scoop update`. View > Install updates automatically turns this off.
 - When a file with the same name already exists, it asks whether to replace, skip or keep both.
 - Folders update live when files change on disk.
 - Downloads is grouped by date modified (Today, Yesterday, Last week…), like in Explorer. Other folders can be grouped from Sort > Group by.
@@ -68,7 +70,8 @@ The Linux version is new and less tested than the Windows one. It keeps the same
 - Copied files go to the clipboard as a list of paths. Pasting paths or `file://` links copied from other file managers works; pasting into other file managers may not.
 - Dragging files out of the window to other apps doesn't work yet. Dropping files into it works on X11.
 - "This PC" lists `/` and disks mounted under `/media`, `/run/media` and `/mnt`.
-- Properties and "Show in file manager" use your file manager over D-Bus (Nautilus, Dolphin, Nemo and Thunar support it).
+- Properties opens the app's own window with General, Security and Details tabs, where permissions and the default app can be changed.
+- "Show in file manager" uses your file manager over D-Bus (Nautilus, Dolphin, Nemo and Thunar support it).
 
 ## Building
 
