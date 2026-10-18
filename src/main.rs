@@ -37,7 +37,8 @@ fn main() -> eframe::Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
-    let start = arg.filter(|_| !hidden).map(PathBuf::from);
+    // Explorer sürücüyü "%1" ile "C:\" diye verir; Windows bunu C:" olarak ayrıştırır
+    let start = arg.filter(|_| !hidden).map(|a| PathBuf::from(a.trim_end_matches('"')));
     if hidden && win::is_serving() || !hidden && win::hand_off(start.as_deref()) {
         return Ok(());
     }

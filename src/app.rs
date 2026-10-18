@@ -47,6 +47,8 @@ struct Config {
     /// Pencere kapanınca süreç gizlenip bekler, sonraki açılış anında olur (Windows)
     background: bool,
     auto_update: bool,
+    /// Varsayılan dosya yöneticisi yapılmadan önceki uygulama (Linux'ta geri yüklemek için)
+    previous_folder_app: Option<String>,
 }
 
 impl Default for Config {
@@ -68,6 +70,7 @@ impl Default for Config {
             grouped: dirs::download_dir().into_iter().collect(),
             background: true,
             auto_update: true,
+            previous_folder_app: None,
         }
     }
 }
@@ -288,6 +291,9 @@ pub struct App {
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
     autostart: bool,
+    previous_folder_app: Option<String>,
+    /// Varsayılan dosya yöneticisi mi; menü ilk açılınca sorulur (Linux'ta bir süreç çalıştırır)
+    default_fm: Option<bool>,
     /// Arka plandaki denetleyici okur; kapatılınca bir sonraki denetim atlanır
     auto_update: Arc<AtomicBool>,
     update_rx: std::sync::mpsc::Receiver<crate::update::Found>,
@@ -1074,6 +1080,8 @@ impl App {
             background: cfg.background,
             resident,
             autostart: win::autostart(),
+            previous_folder_app: cfg.previous_folder_app,
+            default_fm: None,
             auto_update,
             update_rx,
             update_installed: false,
@@ -1155,6 +1163,7 @@ impl App {
             grouped: self.grouped.clone(),
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
+            previous_folder_app: self.previous_folder_app.clone(),
         };
         if let Some(p) = config_path() {
             if let Some(d) = p.parent() {
@@ -2538,6 +2547,17 @@ impl App {
                     self.mark_views_dirty();
                 }
                 ui.checkbox(&mut self.show_ext, crate::i18n::t("Dosya adı uzantıları"));
+                let mut on = *self.default_fm.get_or_insert_with(win::is_default_file_manager);
+                let tip = if cfg!(windows) {
+                    "Klasörler, sürücüler ve Win+E bu uygulamada açılır. Uygulamayı silmeden ya da taşımadan önce bunu kapatın."
+                } else {
+                    "Klasörler bu uygulamada açılır."
+                };
+                if ui.checkbox(&mut on, crate::i18n::t("Varsayılan dosya gezgini olarak kullan")).on_hover_text(crate::i18n::t(tip)).changed() {
+                    let before = win::set_default_file_manager(on, self.previous_folder_app.as_deref());
+                    self.previous_folder_app = before;
+                    self.default_fm = Some(win::is_default_file_manager());
+                }
                 if cfg!(windows) {
                     let r = ui
                         .checkbox(&mut self.background, crate::i18n::t("Anında açılış için arka planda bekle"))
