@@ -62,7 +62,8 @@ fn agent() -> ureq::Agent {
 /// Son sürümü denetler, Windows'ta kurar. Yeni sürüm yoksa `None`.
 pub fn check() -> Result<Option<Found>, String> {
     let ua = format!("SwiftExplorer/{}", env!("CARGO_PKG_VERSION"));
-    let rel: Release = agent()
+    let mut body = Vec::new();
+    agent()
         .get(LATEST)
         .set("User-Agent", &ua)
         .set("Accept", "application/vnd.github+json")
@@ -70,10 +71,9 @@ pub fn check() -> Result<Option<Found>, String> {
         .map_err(|e| e.to_string())?
         .into_reader()
         .take(4 << 20)
-        .bytes()
-        .collect::<Result<Vec<u8>, _>>()
-        .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))?;
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    let rel: Release = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
     if !newer(&rel.tag_name, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
     }
