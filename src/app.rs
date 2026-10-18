@@ -2533,6 +2533,12 @@ impl App {
                         }
                     });
                 }
+                if crate::update::enabled() {
+                    let mut on = self.auto_update.load(Relaxed);
+                    if ui.checkbox(&mut on, crate::i18n::t("Güncellemeleri otomatik yükle")).changed() {
+                        self.auto_update.store(on, Relaxed);
+                    }
+                }
                 ui.separator();
                 ui.label(RichText::new(crate::i18n::t("Tema")).weak());
                 let names = [crate::i18n::t("Sistem"), crate::i18n::t("Açık"), crate::i18n::t("Koyu")].into_iter().chain(scheme::SCHEMES.iter().map(|c| c.name));
