@@ -524,6 +524,9 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
         ctx.style_mut_of(t, |s| {
             s.interaction.selectable_labels = false;
             s.interaction.tooltip_delay = 0.45;
+            // Menüler, açılır listeler ve klavyeyle kaydırma beklemeden tepki versin
+            s.animation_time = 0.0;
+            s.scroll_animation = egui::style::ScrollAnimation::none();
             s.spacing.item_spacing = egui::vec2(6.0, 4.0);
             s.spacing.button_padding = egui::vec2(8.0, 4.0);
             s.spacing.interact_size.y = 26.0;
