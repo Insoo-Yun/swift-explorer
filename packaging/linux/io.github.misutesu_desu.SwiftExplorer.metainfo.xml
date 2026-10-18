@@ -41,6 +41,17 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.6.0" date="2026-10-18">
+      <description>
+        <p>A Properties window on Linux, and a quicker, self-updating Windows version.</p>
+        <ul>
+          <li>On Linux, Properties opens the app's own window with General, Security and Details tabs, where permissions and the default app can be changed. It no longer needs a running file manager.</li>
+          <li>On Windows, closing the window keeps the app waiting in the background, so it opens again right away. It can also start in the background when signing in.</li>
+          <li>On Windows, new releases are downloaded from GitHub, checked against their SHA-256 and installed automatically.</li>
+          <li>Menus open without a fade, and the details pane and address bar no longer read the disk on every frame.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-10-17">
       <description>
         <p>Color schemes, and copies that are safe to unplug when they finish.</p>
