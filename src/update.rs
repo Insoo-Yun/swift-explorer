@@ -50,9 +50,15 @@ fn is_dev_build(exe: &Path) -> bool {
     cfg!(debug_assertions) || exe.ancestors().any(|a| a.file_name().is_some_and(|n| n == "target"))
 }
 
-/// Flatpak kendi güncellemesini yapar
+/// Scoop kurduğu klasöre bu iki dosyayı koyar; sürümü kendisi takip eder
+fn scoop_install(exe: &Path) -> bool {
+    exe.parent().is_some_and(|d| d.join("install.json").exists() && d.join("manifest.json").exists())
+}
+
+/// Flatpak ve Scoop kendi güncellemesini yapar
 pub fn enabled() -> bool {
-    std::env::var_os("FLATPAK_ID").is_none()
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("FLATPAK_ID").is_none() && !std::env::current_exe().is_ok_and(|e| scoop_install(&e)))
 }
 
 fn agent() -> ureq::Agent {
