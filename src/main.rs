@@ -8,6 +8,7 @@ mod scheme;
 #[cfg(feature = "screenshot")]
 mod screenshot;
 mod tab;
+mod update;
 #[cfg_attr(not(windows), path = "shell_unix.rs")]
 mod shell;
 #[cfg_attr(not(windows), path = "win_unix.rs")]
@@ -21,7 +22,17 @@ pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
 fn main() -> eframe::Result<()> {
     let arg = std::env::args().nth(1);
-    let hidden = arg.as_deref() == Some(win::BACKGROUND_ARG);
+    let after_update = arg.as_deref() == Some(update::AFTER_UPDATE_ARG);
+    let hidden = after_update || arg.as_deref() == Some(win::BACKGROUND_ARG);
+    if after_update {
+        // Eski sürüm boruyu bırakıp çıkana dek bekle
+        for _ in 0..100 {
+            if !win::is_serving() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
     let start = arg.filter(|_| !hidden).map(PathBuf::from);
     if hidden && win::is_serving() || !hidden && win::hand_off(start.as_deref()) {
         return Ok(());

@@ -340,6 +340,11 @@ pub fn park(hwnd: isize) {
     PARKED.store(hwnd, SeqCst);
 }
 
+/// Pencere gizli bekliyorsa bekleme durumunu bırakır: sonraki açılış artık bu sürece devredilmez
+pub fn take_parked() -> bool {
+    PARKED.swap(0, SeqCst) != 0
+}
+
 /// Gizliyken gelen açılış isteği
 pub fn take_reopen() -> Option<Option<PathBuf>> {
     REOPEN.lock().unwrap().take()

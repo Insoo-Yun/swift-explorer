@@ -20,6 +20,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ureq = "2"
+sha2 = "0.10"
 
 [features]
 # README görüntülerini üretmek için, bkz. src/screenshot.rs

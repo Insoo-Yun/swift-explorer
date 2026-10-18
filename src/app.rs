@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -46,6 +46,7 @@ struct Config {
     grouped: Vec<PathBuf>,
     /// Pencere kapanınca süreç gizlenip bekler, sonraki açılış anında olur (Windows)
     background: bool,
+    auto_update: bool,
 }
 
 impl Default for Config {
@@ -66,6 +67,7 @@ impl Default for Config {
             tips_dismissed: false,
             grouped: dirs::download_dir().into_iter().collect(),
             background: true,
+            auto_update: true,
         }
     }
 }
@@ -80,6 +82,45 @@ fn load_config() -> Config {
         .or_else(|| legacy_config_path().and_then(|p| std::fs::read_to_string(p).ok()))
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// Açılıştan biraz sonra ve 6 saatte bir yeni sürümü denetler. Pencere gizliyken de çalışır:
+/// yeni sürüm kurulunca gizli süreç onu arka planda başlatıp çıkar. `enabled` yoksa denetlemez.
+fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, ctx: egui::Context) -> std::sync::mpsc::Receiver<crate::update::Found> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let Some(enabled) = enabled.filter(|_| crate::update::enabled()) else { return rx };
+    std::thread::spawn(move || {
+        crate::update::remove_old();
+        // Açılışla yarışmasın
+        std::thread::sleep(Duration::from_secs(15));
+        let mut told = None;
+        loop {
+            if enabled.load(Relaxed) {
+                match crate::update::check() {
+                    Ok(Some(crate::update::Found::Installed(v))) => {
+                        if !fsutil::jobs_running() && win::take_parked() {
+                            crate::update::launch_hidden();
+                            std::process::exit(0);
+                        }
+                        let _ = tx.send(crate::update::Found::Installed(v));
+                        ctx.request_repaint();
+                        return;
+                    }
+                    Ok(Some(crate::update::Found::Available(v, url))) => {
+                        if told.as_ref() != Some(&v) {
+                            told = Some(v.clone());
+                            let _ = tx.send(crate::update::Found::Available(v, url));
+                            ctx.request_repaint();
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("güncelleme denetlenemedi: {e}"),
+                }
+            }
+            std::thread::sleep(Duration::from_secs(6 * 3600));
+        }
+    });
+    rx
 }
 
 /// Açılacak sekmeler ve etkin olanın sırası
@@ -245,6 +286,11 @@ pub struct App {
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
     autostart: bool,
+    /// Arka plandaki denetleyici okur; kapatılınca bir sonraki denetim atlanır
+    auto_update: Arc<AtomicBool>,
+    update_rx: std::sync::mpsc::Receiver<crate::update::Found>,
+    /// Yeni sürüm kuruldu: pencere kapanınca gizlenmek yerine yeni sürüm başlatılır
+    update_installed: bool,
     /// Oturum açılışında başladı: pencere hiç gösterilmeden beklemeye geçer
     #[cfg_attr(not(windows), allow(dead_code))]
     start_hidden: bool,
@@ -1001,6 +1047,10 @@ impl App {
 
         let (paths, active) = startup_tabs(&cfg, start);
         let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
+        let resident = win::serve(ctx.clone());
+        let auto_update = Arc::new(AtomicBool::new(cfg.auto_update));
+        // Aynı anda tek süreç güncellesin: sonraki açılışları karşılayan süreç
+        let update_rx = spawn_update_checker((resident || !cfg!(windows)).then(|| auto_update.clone()), ctx.clone());
         // Yalnızca etkin sekme hemen yüklenir; diğerleri ilk açıldıklarında
         let tabs = paths.into_iter().enumerate().map(|(i, p)| if i == active { Tab::new(p, &ctx) } else { Tab::new_lazy(p) }).collect();
 
@@ -1020,8 +1070,11 @@ impl App {
             tips_dismissed: cfg.tips_dismissed,
             grouped: cfg.grouped,
             background: cfg.background,
-            resident: win::serve(ctx.clone()),
+            resident,
             autostart: win::autostart(),
+            auto_update,
+            update_rx,
+            update_installed: false,
             start_hidden: hidden,
             known: known_folders(),
             tree_open: Default::default(),
@@ -1068,6 +1121,20 @@ impl App {
         app
     }
 
+    fn poll_update(&mut self) {
+        while let Ok(found) = self.update_rx.try_recv() {
+            match found {
+                crate::update::Found::Installed(v) => {
+                    self.update_installed = true;
+                    self.toast(crate::i18n::tf("Swift Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.", &[&v]), false);
+                }
+                crate::update::Found::Available(v, url) => {
+                    self.toast(crate::i18n::tf("Yeni sürüm var: {}. İndirmek için: {}", &[&v, &url]), false);
+                }
+            }
+        }
+    }
+
     fn save_config(&mut self) {
         let cfg = Config {
             bookmarks: self.bookmarks.clone(),
@@ -1085,6 +1152,7 @@ impl App {
             tips_dismissed: self.tips_dismissed,
             grouped: self.grouped.clone(),
             background: self.background,
+            auto_update: self.auto_update.load(Relaxed),
         };
         if let Some(p) = config_path() {
             if let Some(d) = p.parent() {
@@ -4134,7 +4202,13 @@ impl eframe::App for App {
         if let Some(start) = win::take_reopen() {
             self.reopen(start);
         }
-        if self.resident && self.background && ctx.input(|i| i.viewport().close_requested()) {
+        self.poll_update();
+        if self.update_installed && ctx.input(|i| i.viewport().close_requested()) {
+            // Gizlenmek yerine çık; yeni sürüm arka planda bekleyecek
+            if self.resident && self.background {
+                crate::update::launch_hidden();
+            }
+        } else if self.resident && self.background && ctx.input(|i| i.viewport().close_requested()) {
             if let Some(hwnd) = self.hwnd {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.park(hwnd);

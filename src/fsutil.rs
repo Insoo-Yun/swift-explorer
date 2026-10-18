@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -491,8 +491,16 @@ pub struct Job {
     pub pairs: Mutex<Vec<(PathBuf, PathBuf)>>,
 }
 
+/// Bitmemiş işler; süreç güncelleme için kendini kapatmadan önce bakar
+static RUNNING: AtomicUsize = AtomicUsize::new(0);
+
+pub fn jobs_running() -> bool {
+    RUNNING.load(Relaxed) > 0
+}
+
 impl Job {
     fn new(label: String, kind: JobKind) -> Arc<Job> {
+        RUNNING.fetch_add(1, Relaxed);
         Arc::new(Job {
             label,
             kind,
@@ -509,6 +517,10 @@ impl Job {
             errors: Mutex::new(Vec::new()),
             pairs: Mutex::new(Vec::new()),
         })
+    }
+    fn finish(&self) {
+        self.finished.store(true, Relaxed);
+        RUNNING.fetch_sub(1, Relaxed);
     }
     fn err(&self, e: String) {
         self.errors.lock().unwrap().push(e);
@@ -723,7 +735,7 @@ pub fn spawn_transfer(srcs: Vec<PathBuf>, dest: PathBuf, cut: bool, conflict: Co
             }
             j.pairs.lock().unwrap().push((s, target));
         }
-        j.finished.store(true, Relaxed);
+        j.finish();
         ctx.request_repaint();
     });
     job
@@ -791,7 +803,7 @@ pub fn spawn_delete(paths: Vec<PathBuf>, permanent: bool, ctx: egui::Context) ->
             j.done.store(paths.len() as u64, Relaxed);
             j.pairs.lock().unwrap().extend(paths.iter().map(|p| (p.clone(), p.clone())));
         }
-        j.finished.store(true, Relaxed);
+        j.finish();
         ctx.request_repaint();
     });
     job
@@ -812,7 +824,7 @@ pub fn spawn_sizes(dirs: Vec<PathBuf>, out: Arc<Mutex<HashMap<PathBuf, u64>>>, c
             j.done.fetch_add(1, Relaxed);
             ctx.request_repaint();
         }
-        j.finished.store(true, Relaxed);
+        j.finish();
         ctx.request_repaint();
     });
     job
@@ -825,7 +837,7 @@ pub fn spawn_restore(paths: Vec<PathBuf>, ctx: egui::Context) -> Arc<Job> {
         if let Err(e) = restore_from_trash(&paths) {
             j.err(e);
         }
-        j.finished.store(true, Relaxed);
+        j.finish();
         ctx.request_repaint();
     });
     job

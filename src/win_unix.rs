@@ -253,6 +253,10 @@ pub fn serve(_ctx: egui::Context) -> bool {
 
 pub fn park(_hwnd: isize) {}
 
+pub fn take_parked() -> bool {
+    false
+}
+
 pub fn take_reopen() -> Option<Option<PathBuf>> {
     None
 }

@@ -79,6 +79,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Anında açılış için arka planda bekle", "在后台等待以便即时打开"),
     ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "关闭窗口后应用会隐藏并保持就绪。安装新版本前请关闭此选项并关闭窗口。"),
     ("Oturum açılınca arka planda başlat", "登录时在后台启动"),
+    ("Swift Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.", "Swift Explorer {} 已安装。关闭窗口即可切换到新版本。"),
+    ("Yeni sürüm var: {}. İndirmek için: {}", "有新版本：{}。下载：{}"),
     ("Tema", "主题"),
     ("Sistem", "系统"),
     ("Açık", "浅色"),

@@ -79,6 +79,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Anında açılış için arka planda bekle", "Im Hintergrund warten, damit es sofort startet"),
     ("Pencere kapanınca uygulama gizlenip bekler. Yeni sürümü kurmadan önce bunu kapatıp pencereyi kapatın.", "Beim Schließen des Fensters wird die App ausgeblendet und bleibt bereit. Vor dem Installieren einer neuen Version dies ausschalten und das Fenster schließen."),
     ("Oturum açılınca arka planda başlat", "Bei der Anmeldung im Hintergrund starten"),
+    ("Swift Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.", "Swift Explorer {} ist installiert. Schließen Sie das Fenster, um zur neuen Version zu wechseln."),
+    ("Yeni sürüm var: {}. İndirmek için: {}", "Neue Version verfügbar: {}. Download: {}"),
     ("Tema", "Design"),
     ("Sistem", "System"),
     ("Açık", "Hell"),
