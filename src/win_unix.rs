@@ -125,7 +125,7 @@ pub fn default_app(path: &Path) -> Option<crate::properties::AppInfo> {
     let mime = mime_of(path)?;
     let id = default_app_id(&mime)?;
     let name = crate::desktop_apps::app_name(&id).unwrap_or_else(|| id.trim_end_matches(".desktop").to_string());
-    Some(crate::properties::AppInfo { name, exe: None })
+    Some(crate::properties::AppInfo { name })
 }
 
 pub fn open_with(path: &Path) {

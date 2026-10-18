@@ -6,6 +6,7 @@ mod desktop_apps;
 mod fsutil;
 mod i18n;
 mod images;
+#[cfg(not(windows))]
 mod properties;
 mod scheme;
 #[cfg(feature = "screenshot")]

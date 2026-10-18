@@ -457,33 +457,20 @@ pub fn dir_size(dir: &Path, cancel: &AtomicBool) -> u64 {
 // ---------------------------------------------------------------- özellikler penceresi
 
 /// Özellikler penceresi için bir ağacın toplam boyutu ve öğe sayıları; arka planda dolar
+#[cfg(not(windows))]
 #[derive(Default)]
 pub struct TreeStats {
     pub size: AtomicU64,
-    /// Diskte kapladığı yer (Linux'ta blok sayısından); diğer sistemlerde `size` ile aynı
+    /// Diskte kapladığı yer, blok sayısından
     pub on_disk: AtomicU64,
     pub files: AtomicU64,
     pub dirs: AtomicU64,
     pub done: AtomicBool,
     pub cancel: AtomicBool,
-    /// Windows'ta diskteki yer küme boyutuna yuvarlanır (0: yuvarlama yok)
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub cluster: u64,
-}
-
-impl TreeStats {
-    pub fn with_cluster(cluster: u64) -> TreeStats {
-        TreeStats { cluster, ..Default::default() }
-    }
-}
-
-/// `len` baytın `cluster` boyutlu kümelerde kapladığı yer
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn round_to_cluster(len: u64, cluster: u64) -> u64 {
-    if cluster == 0 { len } else { len.div_ceil(cluster) * cluster }
 }
 
 /// `path` bir dosyaysa onu, klasörse içindekileri sayar. Sembolik bağlantılar izlenmez.
+#[cfg(not(windows))]
 pub fn scan_tree(path: &Path, st: &TreeStats) {
     let Ok(md) = fs::symlink_metadata(path) else { return };
     if md.is_dir() {
@@ -493,18 +480,15 @@ pub fn scan_tree(path: &Path, st: &TreeStats) {
     }
 }
 
+#[cfg(not(windows))]
 fn add_file(md: &fs::Metadata, st: &TreeStats) {
+    use std::os::unix::fs::MetadataExt;
     st.files.fetch_add(1, Relaxed);
     st.size.fetch_add(md.len(), Relaxed);
-    #[cfg(not(windows))]
-    {
-        use std::os::unix::fs::MetadataExt;
-        st.on_disk.fetch_add(md.blocks() * 512, Relaxed);
-    }
-    #[cfg(windows)]
-    st.on_disk.fetch_add(round_to_cluster(md.len(), st.cluster), Relaxed);
+    st.on_disk.fetch_add(md.blocks() * 512, Relaxed);
 }
 
+#[cfg(not(windows))]
 fn scan_dir(dir: &Path, st: &TreeStats) {
     if st.cancel.load(Relaxed) {
         return;
@@ -1006,15 +990,6 @@ pub fn read_preview(path: &Path) -> PreviewData {
 mod tests {
     use super::*;
 
-    #[test]
-    fn cluster_rounding() {
-        assert_eq!(round_to_cluster(0, 4096), 0);
-        assert_eq!(round_to_cluster(1, 4096), 4096);
-        assert_eq!(round_to_cluster(4096, 4096), 4096);
-        assert_eq!(round_to_cluster(12_591, 4096), 16_384);
-        assert_eq!(round_to_cluster(5, 0), 5);
-    }
-
     #[cfg(not(windows))]
     #[test]
     fn mode_strings() {
@@ -1027,6 +1002,7 @@ mod tests {
         assert_eq!(mode_string(0o1776), "rwxrwxrwT");
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn tree_stats_count_files_dirs_and_size() {
         let root = std::env::temp_dir().join(format!("swift-explorer-props-{}", std::process::id()));

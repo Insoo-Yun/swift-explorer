@@ -246,6 +246,7 @@ enum Dialog {
     ConfirmDelete { paths: Vec<PathBuf> },
     Conflict { files: Vec<PathBuf>, dest: PathBuf, cut: bool, names: Vec<String> },
     Help,
+    #[cfg(not(windows))]
     Properties(Box<crate::properties::Properties>),
 }
 
@@ -1798,6 +1799,10 @@ impl App {
                     self.toast(crate::i18n::tf("{} başlatılamadı", &[&name]), true);
                 }
             }
+            // Windows'un kendi penceresi: Güvenlik, Uyumluluk, Önceki Sürümler gibi sekmeler orada
+            #[cfg(windows)]
+            Action::Properties(p) => win::show_properties(&p),
+            #[cfg(not(windows))]
             Action::Properties(p) => {
                 // Seçili öğelerden biri için istendiyse hepsinin toplamı gösterilir
                 let mut paths = self.tab().selected_paths();
@@ -4089,6 +4094,7 @@ impl App {
                     }
                 }
             }
+            #[cfg(not(windows))]
             Dialog::Properties(pr) => {
                 let images = &mut self.images;
                 let out = pr.show(ctx, &mut |ui, path, is_dir, ext, size| {

@@ -1,6 +1,6 @@
-//! Uygulamanın kendi Özellikler penceresi (Windows'taki Genel / Dijital İmzalar / Güvenlik /
-//! Ayrıntılar / Önceki Sürümler sekmeli pencerenin karşılığı). Tüm sistemlerde aynı çalışır;
-//! renkleri uygulamanın temasından alır. Bir sistemde karşılığı olmayan sekmeler bilgi şeridi gösterir.
+//! Linux için Özellikler penceresi (Windows'taki Genel / Dijital İmzalar / Güvenlik /
+//! Ayrıntılar / Önceki Sürümler sekmeli pencerenin karşılığı); renkleri uygulamanın temasından
+//! alır. Karşılığı olmayan sekmeler bilgi şeridi gösterir. Windows'ta sistemin kendi penceresi açılır.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering::Relaxed;
@@ -15,16 +15,6 @@ use crate::fsutil::{self, TreeStats};
 /// Dosyayı açan varsayılan uygulama
 pub struct AppInfo {
     pub name: String,
-    /// Ikonu çizmek için programın yolu (bilinmiyorsa ikon çizilmez)
-    pub exe: Option<PathBuf>,
-}
-
-/// Dijital imza satırı (Windows)
-#[cfg_attr(not(windows), allow(dead_code))]
-pub struct Signer {
-    pub name: String,
-    pub digest: String,
-    pub message: String,
 }
 
 /// Arka planda okunan değer
@@ -67,8 +57,7 @@ struct Info {
     /// Tek bir dosyanın (boyut, diskteki boyut); klasör ve çoklu seçimde arka plandaki sayım kullanılır
     file_size: Option<(u64, u64)>,
     readonly: bool,
-    hidden: bool,
-    /// Unix izin bitleri (Windows'ta 0)
+    /// Unix izin bitleri
     mode: u32,
     owner: String,
     group: String,
@@ -96,18 +85,14 @@ pub struct Properties {
     info: Info,
     stats: Option<Arc<TreeStats>>,
     opens_with: Option<Shared<Option<AppInfo>>>,
-    #[cfg_attr(not(windows), allow(dead_code))]
-    signatures: Option<Shared<Vec<Signer>>>,
     tab: Tab,
     /// Pencerenin ilk konumu (ana pencerenin ortası); sonradan değişmez ki kullanıcı taşıyabilsin
     pos: Option<egui::Pos2>,
     /// Varsayılan uygulama seçici (Linux)
-    #[cfg(not(windows))]
     chooser: Option<Chooser>,
     // Düzenlenebilir alanlar; `info` ile farklıysa "Uygula" etkinleşir
     name: String,
     readonly: bool,
-    hidden: bool,
     mode: u32,
 }
 
@@ -120,11 +105,7 @@ impl Drop for Properties {
 }
 
 fn start_scan(paths: &[PathBuf], ctx: &egui::Context) -> Arc<TreeStats> {
-    #[cfg(windows)]
-    let cluster = paths.first().and_then(|p| crate::win::cluster_size(p)).unwrap_or(0);
-    #[cfg(not(windows))]
-    let cluster = 0;
-    let st = Arc::new(TreeStats::with_cluster(cluster));
+    let st = Arc::new(TreeStats::default());
     let (t, c) = (st.clone(), ctx.clone());
     let roots = paths.to_vec();
     let multi = roots.len() > 1;
@@ -161,37 +142,22 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
     } else {
         format!("{} (.{})", type_name, first.extension().unwrap_or_default().to_string_lossy())
     };
-    #[cfg(not(windows))]
-    let (readonly, hidden, mode, owner, group, attrs) = {
+    let (readonly, mode, owner, group, attrs) = {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let mode = md.permissions().mode();
         let kind_char = if lmd.file_type().is_symlink() { 'l' } else if is_dir { 'd' } else { '-' };
         (
             mode & 0o222 == 0,
-            name.starts_with('.'),
             mode & 0o7777,
             fsutil::user_name(md.uid()).unwrap_or_else(|| md.uid().to_string()),
             fsutil::group_name(md.gid()).unwrap_or_else(|| md.gid().to_string()),
             format!("{kind_char}{}", fsutil::mode_string(mode)),
         )
     };
-    #[cfg(windows)]
-    let (readonly, hidden, mode, owner, group, attrs) = {
-        use std::os::windows::fs::MetadataExt;
-        let a = md.file_attributes();
-        let letters: String = [(0x1, 'R'), (0x2, 'H'), (0x4, 'S'), (0x20, 'A')].iter().filter(|(b, _)| a & b != 0).map(|(_, c)| *c).collect();
-        (a & 0x1 != 0, a & 0x2 != 0, 0, String::new(), String::new(), letters)
-    };
-    #[cfg(not(windows))]
     let mime = if is_dir { "inode/directory".to_string() } else { mime_guess::from_path(first).first_raw().unwrap_or("application/octet-stream").to_string() };
-    #[cfg(windows)]
-    let mime = String::new();
 
     let file_size = (single && !is_dir).then(|| {
-        #[cfg(not(windows))]
         let on_disk = std::os::unix::fs::MetadataExt::blocks(&md) * 512;
-        #[cfg(windows)]
-        let on_disk = fsutil::round_to_cluster(md.len(), crate::win::cluster_size(first).unwrap_or(0));
         (md.len(), on_disk)
     });
     Some(Info {
@@ -205,7 +171,6 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
         accessed: md.accessed().ok(),
         file_size,
         readonly,
-        hidden,
         mode,
         owner,
         group,
@@ -271,13 +236,6 @@ fn size_full(n: u64) -> String {
     }
 }
 
-/// Dijital imzası olabilecek dosya türleri (Windows bu sekmeyi yalnızca imzalı dosyalarda gösterir)
-#[cfg_attr(not(windows), allow(dead_code))]
-fn signable(path: &Path) -> bool {
-    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    matches!(ext.as_str(), "exe" | "dll" | "sys" | "ocx" | "scr" | "msi" | "msp" | "cab" | "cat" | "ps1" | "psm1" | "psd1" | "vbs" | "js" | "wsf" | "msix" | "appx" | "msixbundle" | "appxbundle")
-}
-
 impl Properties {
     /// `type_name`: tek öğenin tür adı (çağıran önbellekten verir)
     pub fn new(paths: Vec<PathBuf>, type_name: String, ctx: &egui::Context) -> Option<Properties> {
@@ -288,27 +246,17 @@ impl Properties {
             let p = paths[0].clone();
             spawn_load(ctx, move || crate::win::default_app(&p))
         });
-        #[cfg(windows)]
-        let signatures = (single_file && signable(&paths[0])).then(|| {
-            let p = paths[0].clone();
-            spawn_load(ctx, move || crate::win::signatures(&p))
-        });
-        #[cfg(not(windows))]
-        let signatures = None;
         Some(Properties {
             name: info.name.clone(),
             readonly: info.readonly,
-            hidden: info.hidden,
             mode: info.mode,
             paths,
             type_name,
             info,
             stats,
             opens_with,
-            signatures,
             tab: Tab::General,
             pos: None,
-            #[cfg(not(windows))]
             chooser: None,
         })
     }
@@ -317,14 +265,8 @@ impl Properties {
         self.paths.len() == 1
     }
 
-    /// Unix'te "gizli" adın başındaki noktadır; Windows'ta ayrı bir öznitelik
-    fn hidden_is_name(&self) -> bool {
-        cfg!(not(windows))
-    }
-
     fn dirty(&self) -> bool {
-        let hidden_changed = !self.hidden_is_name() && self.hidden != self.info.hidden;
-        (self.single() && self.name.trim() != self.info.name) || self.readonly != self.info.readonly || hidden_changed || self.mode != self.info.mode
+        (self.single() && self.name.trim() != self.info.name) || self.readonly != self.info.readonly || self.mode != self.info.mode
     }
 
     /// İkon için (yol, klasör mü, uzantı)
@@ -334,16 +276,11 @@ impl Properties {
         (p, self.info.is_dir, ext)
     }
 
-    /// Görünen sekmeler, Windows'taki sırayla. Windows imzasız dosyada İmzalar sekmesini göstermez.
+    /// Görünen sekmeler, Windows'taki sırayla
     fn tabs(&self) -> Vec<(Tab, &'static str)> {
         let mut v = vec![(Tab::General, "Genel")];
         if self.single() {
-            let show_signatures = if cfg!(windows) {
-                self.signatures.as_ref().is_some_and(|s| matches!(&*s.lock().unwrap(), Loaded::Done(l) if !l.is_empty()))
-            } else {
-                !self.info.is_dir
-            };
-            if show_signatures {
+            if !self.info.is_dir {
                 v.push((Tab::DigitalSignatures, "Dijital imzalar"));
             }
             v.push((Tab::Security, "Güvenlik"));
@@ -358,20 +295,6 @@ impl Properties {
         let mut errors: Vec<String> = Vec::new();
         let ro_changed = self.readonly != self.info.readonly;
 
-        #[cfg(windows)]
-        {
-            let hidden_changed = self.hidden != self.info.hidden;
-            if ro_changed || hidden_changed {
-                for p in &self.paths {
-                    let r = crate::win::set_attributes(p, ro_changed.then_some(self.readonly), hidden_changed.then_some(self.hidden));
-                    if let Err(e) = r {
-                        errors.push(e.to_string());
-                    }
-                }
-                out.refresh = true;
-            }
-        }
-        #[cfg(not(windows))]
         if self.mode != self.info.mode || ro_changed {
             use std::os::unix::fs::PermissionsExt;
             for p in &self.paths {
@@ -405,7 +328,6 @@ impl Properties {
         if let Some(info) = load_info(&self.paths, &self.type_name) {
             self.name = info.name.clone();
             self.readonly = info.readonly;
-            self.hidden = info.hidden;
             self.mode = info.mode;
             self.info = info;
         }
@@ -441,7 +363,6 @@ impl Properties {
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("swift_explorer_properties"), builder, |ctx, class| {
             out = self.viewport_ui(ctx, class, &title, busy, icon);
         });
-        #[cfg(not(windows))]
         if self.chooser.is_some() {
             self.run_chooser(ctx);
         }
@@ -525,7 +446,7 @@ impl Properties {
         self.grid(ui, "props_type", |ui, row| {
             row(ui, "Tür", self.info.kind.clone());
         });
-        if self.opens_with.is_some() && self.opens_with_row(ui, icon) {
+        if self.opens_with.is_some() && self.opens_with_row(ui) {
             self.change_default_app(ui.ctx());
         }
         self.grid(ui, "props_loc", |ui, row| {
@@ -570,21 +491,16 @@ impl Properties {
                 self.set_readonly(ro);
             }
             // Unix'te gizli olmak adın noktayla başlamasıdır; çoklu seçimde birden çok adı değiştirmeyiz
-            let mut hidden = if self.hidden_is_name() { self.name.starts_with('.') } else { self.hidden };
-            let can_hide = !self.hidden_is_name() || self.single();
-            if ui.add_enabled(can_hide, egui::Checkbox::new(&mut hidden, crate::i18n::t("Gizli"))).changed() {
-                if self.hidden_is_name() {
-                    self.name = if hidden { format!(".{}", self.name) } else { self.name.trim_start_matches('.').to_string() };
-                } else {
-                    self.hidden = hidden;
-                }
+            let mut hidden = self.name.starts_with('.');
+            if ui.add_enabled(self.single(), egui::Checkbox::new(&mut hidden, crate::i18n::t("Gizli"))).changed() {
+                self.name = if hidden { format!(".{}", self.name) } else { self.name.trim_start_matches('.').to_string() };
             }
         });
         enter
     }
 
     /// "Opens with: [simge] Notepad   [Değiştir…]"; Değiştir'e basıldıysa `true` döner
-    fn opens_with_row(&self, ui: &mut egui::Ui, icon: &mut IconFn) -> bool {
+    fn opens_with_row(&self, ui: &mut egui::Ui) -> bool {
         let Some(cell) = &self.opens_with else { return false };
         let guard = cell.lock().unwrap();
         let mut change = false;
@@ -596,9 +512,6 @@ impl Properties {
                     ui.label(RichText::new(crate::i18n::t("Yükleniyor…")).weak());
                 }
                 Loaded::Done(app) => {
-                    if let Some(exe) = app.as_ref().and_then(|a| a.exe.as_deref()) {
-                        icon(ui, exe, false, "exe", 18.0);
-                    }
                     ui.label(app.as_ref().map_or_else(|| crate::i18n::t("Bilinmiyor").to_string(), |a| a.name.clone()));
                 }
             }
@@ -611,29 +524,18 @@ impl Properties {
         change
     }
 
-    /// Windows: sistemin "Birlikte aç" penceresi. Linux: kurulu uygulamaların listesi (`xdg-mime` ile ayarlanır).
+    /// Kurulu uygulamaların listesi; seçilen `xdg-mime` ile varsayılan yapılır
     fn change_default_app(&mut self, ctx: &egui::Context) {
         let p = self.paths[0].clone();
-        #[cfg(windows)]
-        {
-            self.opens_with = Some(spawn_load(ctx, move || {
-                crate::win::choose_default_app(&p);
-                crate::win::default_app(&p)
-            }));
-        }
-        #[cfg(not(windows))]
-        {
-            let data = spawn_load(ctx, move || {
-                let mime = crate::win::mime_of(&p).unwrap_or_default();
-                let current = crate::win::default_app_id(&mime);
-                let (recommended, other) = crate::desktop_apps::installed_apps().into_iter().partition(|a| a.mimes.contains(&mime));
-                ChooserData { mime, current, recommended, other }
-            });
-            self.chooser = Some(Chooser { data, selected: None, pos: None, synced: false, scroll_pending: false, icons: Default::default() });
-        }
+        let data = spawn_load(ctx, move || {
+            let mime = crate::win::mime_of(&p).unwrap_or_default();
+            let current = crate::win::default_app_id(&mime);
+            let (recommended, other) = crate::desktop_apps::installed_apps().into_iter().partition(|a| a.mimes.contains(&mime));
+            ChooserData { mime, current, recommended, other }
+        });
+        self.chooser = Some(Chooser { data, selected: None, pos: None, synced: false, scroll_pending: false, icons: Default::default() });
     }
 
-    #[cfg(not(windows))]
     fn run_chooser(&mut self, ctx: &egui::Context) {
         let ext = self.paths[0].extension().map_or_else(|| self.info.name.clone(), |e| format!(".{}", e.to_string_lossy()));
         let Some(ch) = self.chooser.as_mut() else { return };
@@ -654,71 +556,20 @@ impl Properties {
     /// Salt okunur: Unix'te yazma izinlerini açıp kapatır (Güvenlik sekmesiyle tutarlı kalır)
     fn set_readonly(&mut self, ro: bool) {
         self.readonly = ro;
-        if self.single() && cfg!(not(windows)) {
+        if self.single() {
             self.mode = if ro { self.mode & !0o222 } else { self.mode | 0o200 };
         }
     }
 
     fn signatures_tab(&self, ui: &mut egui::Ui) {
-        #[cfg(not(windows))]
         banner(ui, "Dijital imzalar bu sistemde desteklenmiyor.");
-        #[cfg(windows)]
-        {
-            let Some(cell) = &self.signatures else { return };
-            let guard = cell.lock().unwrap();
-            let Loaded::Done(list) = &*guard else { return };
-            ui.label(crate::i18n::t("İmza listesi"));
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_min_height(120.0);
-                egui::Grid::new("props_sigs").num_columns(3).striped(true).spacing([14.0, 6.0]).min_col_width((ui.available_width() - 28.0) / 3.0).show(ui, |ui| {
-                    for h in ["İmzalayanın adı", "Özet algoritması", "Zaman damgası"] {
-                        ui.label(RichText::new(crate::i18n::t(h)).strong());
-                    }
-                    ui.end_row();
-                    for s in list {
-                        ui.label(&s.name);
-                        ui.label(&s.digest);
-                        ui.label(RichText::new(crate::i18n::t("Kullanılamıyor")).weak());
-                        ui.end_row();
-                    }
-                });
-            });
-            if let Some(s) = list.first() {
-                ui.add_space(6.0);
-                ui.label(RichText::new(&s.message).weak());
-            }
-            ui.add_space(8.0);
-            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                if ui.add(egui::Button::new(crate::i18n::t("Ayrıntılar")).min_size(egui::vec2(90.0, 26.0))).clicked() {
-                    crate::win::show_properties(&self.paths[0], Some("Digital Signatures"));
-                }
-            });
-        }
     }
 
     fn previous_versions_tab(&self, ui: &mut egui::Ui) {
-        #[cfg(not(windows))]
         banner(ui, "Önceki sürümler bu sistemde desteklenmiyor.");
-        #[cfg(windows)]
-        {
-            ui.label(crate::i18n::t("Önceki sürümler Windows tarafından yönetilir (geri yükleme noktaları ve Dosya Geçmişi)."));
-            ui.add_space(8.0);
-            if ui.button(crate::i18n::t("Windows önceki sürümlerini aç")).clicked() {
-                crate::win::show_properties(&self.paths[0], Some("Previous Versions"));
-            }
-        }
     }
 
     fn security_tab(&mut self, ui: &mut egui::Ui) {
-        #[cfg(windows)]
-        {
-            ui.label(crate::i18n::t("Windows dosya izinleri sistem tarafından yönetilir."));
-            ui.add_space(8.0);
-            if ui.button(crate::i18n::t("Windows güvenlik ayarlarını aç")).clicked() {
-                crate::win::show_properties(&self.paths[0], Some("Security"));
-            }
-        }
-        #[cfg(not(windows))]
         {
             self.grid(ui, "props_owner", |ui, row| {
                 row(ui, "Sahip", self.info.owner.clone());
@@ -824,7 +675,6 @@ fn kv_row(ui: &mut egui::Ui, key: &str, value: String) {
 }
 
 /// Bu sistemde karşılığı olmayan sekmelerde gösterilen bilgi şeridi
-#[cfg_attr(windows, allow(dead_code))]
 fn banner(ui: &mut egui::Ui, text: &str) {
     egui::Frame::group(ui.style()).fill(ui.visuals().faint_bg_color).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -837,9 +687,7 @@ fn banner(ui: &mut egui::Ui, text: &str) {
 
 const BUTTON_H: f32 = 28.0;
 const WINDOW_SIZE: egui::Vec2 = egui::vec2(470.0, 540.0);
-#[cfg(not(windows))]
 const ICON_SIZE: f32 = 22.0;
-#[cfg(not(windows))]
 const CHOOSER_SIZE: egui::Vec2 = egui::vec2(420.0, 500.0);
 
 /// Ana pencerenin ortasına yerleşen bir pencerenin sol üst köşesi
@@ -866,7 +714,6 @@ fn panel_frame(ui: &egui::Ui, margin: i8) -> egui::Frame {
     egui::Frame::NONE.fill(ui.visuals().panel_fill).inner_margin(egui::Margin::symmetric(margin + 2, margin))
 }
 
-#[cfg(not(windows))]
 struct ChooserData {
     mime: String,
     /// Şu an varsayılan olan uygulamanın kimliği
@@ -875,7 +722,6 @@ struct ChooserData {
     other: Vec<crate::desktop_apps::DesktopApp>,
 }
 
-#[cfg(not(windows))]
 struct Chooser {
     data: Shared<ChooserData>,
     selected: Option<String>,
@@ -887,7 +733,6 @@ struct Chooser {
     icons: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
-#[cfg(not(windows))]
 enum ChooserEvent {
     None,
     Cancel,
@@ -895,7 +740,6 @@ enum ChooserEvent {
 }
 
 /// "Birlikte aç…" penceresi: dosya türü için varsayılan uygulamayı seçtirir (ayrı pencere)
-#[cfg(not(windows))]
 fn show_chooser(ch: &mut Chooser, ctx: &egui::Context, ext: &str) -> ChooserEvent {
     let mut event = ChooserEvent::None;
     let pos = *ch.pos.get_or_insert_with(|| centered_on_parent(ctx, CHOOSER_SIZE));
@@ -1021,13 +865,5 @@ mod tests {
         assert_eq!(group_with(1000, ","), "1,000");
         assert_eq!(group_with(12_591, ","), "12,591");
         assert_eq!(group_with(1_234_567_890, "."), "1.234.567.890");
-    }
-
-    #[test]
-    fn signable_types() {
-        assert!(signable(Path::new("C:/x/ETL Drive Mapper.PS1")));
-        assert!(signable(Path::new("setup.exe")));
-        assert!(!signable(Path::new("notes.txt")));
-        assert!(!signable(Path::new("Makefile")));
     }
 }
