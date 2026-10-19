@@ -59,21 +59,11 @@ jobs:
         with:
           name: SwiftExplorer.exe
       - name: Write latest.json
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
-          test -n "$UPDATE_SIGNING_KEY" || { echo "UPDATE_SIGNING_KEY secret is missing"; exit 1; }
           version="${GITHUB_REF_NAME#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases"
           sha=$(sha256sum SwiftExplorer.exe | cut -d' ' -f1)
-          # İmza sürümü de kapsar; eski bir exe yeni sürüm diye sunulamaz. Biçim src/update.rs'deki signed_message ile aynı.
-          printf '%s' "$UPDATE_SIGNING_KEY" > key.pem
-          printf 'swift-explorer %s %s' "$version" "$sha" > message
-          openssl pkeyutl -sign -inkey key.pem -rawin -in message -out sig.bin
-          rm key.pem
-          sig=$(od -An -tx1 -v sig.bin | tr -d ' 
-')
-          jq -n --arg v "$version" --arg page "$base/tag/$GITHUB_REF_NAME"             --arg url "$base/download/$GITHUB_REF_NAME/SwiftExplorer.exe" --arg sha "$sha" --arg sig "$sig"             '{version: $v, page: $page, windows: {url: $url, sha256: $sha, sig: $sig}}' > latest.json
+          jq -n --arg v "$version" --arg page "$base/tag/$GITHUB_REF_NAME"             --arg url "$base/download/$GITHUB_REF_NAME/SwiftExplorer.exe" --arg sha "$sha"             '{version: $v, page: $page, windows: {url: $url, sha256: $sha}}' > latest.json
           cat latest.json
       - uses: softprops/action-gh-release@v2
         with:

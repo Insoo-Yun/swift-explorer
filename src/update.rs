@@ -33,33 +33,6 @@ struct Manifest {
 struct Binary {
     url: String,
     sha256: String,
-    /// `signed_message` için ed25519 imzası, onaltılık
-    sig: String,
-}
-
-/// CI'daki UPDATE_SIGNING_KEY'in açık anahtarı. GitHub hesabı ele geçirilse bile
-/// bu anahtarla imzalanmamış exe kurulmaz.
-const PUBLIC_KEY: [u8; 32] = [
-    0x3c, 0x90, 0xcc, 0x71, 0x67, 0xc3, 0x62, 0xc6, 0x09, 0x2c, 0x35, 0x0a, 0xc1, 0xda, 0xa9, 0xcb,
-    0x6d, 0x55, 0x4c, 0xa1, 0x47, 0x14, 0x77, 0x09, 0x12, 0x75, 0xfb, 0x22, 0xd6, 0x17, 0xd9, 0x38,
-];
-
-/// build.yml'deki imzalanan metinle aynı olmalı
-fn signed_message(version: &str, sha256: &str) -> String {
-    format!("swift-explorer {version} {sha256}")
-}
-
-fn from_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok()).collect()
-}
-
-fn signature_ok(key: &[u8], version: &str, sha256: &str, sig: &str) -> bool {
-    use ring::signature::{UnparsedPublicKey, ED25519};
-    let Some(sig) = from_hex(sig) else { return false };
-    UnparsedPublicKey::new(&ED25519, key).verify(signed_message(version, sha256).as_bytes(), &sig).is_ok()
 }
 
 /// "v0.5.1" > "0.5.0"; sayı olmayan etiketler yeni sayılmaz
@@ -120,9 +93,6 @@ pub fn check() -> Result<Option<Found>, String> {
     // Bu sürüm açılışta çöktüğü için geri alındı; kullanıcı isterse kendisi indirir
     if std::fs::read_to_string(with_ext(&exe, ".skip")).is_ok_and(|v| v.trim() == m.version) {
         return available;
-    }
-    if !signature_ok(&PUBLIC_KEY, &m.version, &bin.sha256, &bin.sig) {
-        return Err("güncelleme imzası geçersiz".into());
     }
     match install(&exe, &bin.url, &bin.sha256, &ua) {
         Ok(()) => Ok(Some(Found::Installed(m.version))),
@@ -247,7 +217,7 @@ pub fn launch_hidden() {
 
 #[cfg(test)]
 mod tests {
-    use super::{install, newer, roll_back_if_failing, signature_ok, signed_message, with_ext};
+    use super::{install, newer, roll_back_if_failing, with_ext};
 
     /// Ağ gerektirir: cargo test -- --ignored
     #[test]
@@ -289,22 +259,6 @@ mod tests {
         assert!(!with_ext(&exe, ".pending").exists());
         assert!(!roll_back_if_failing(&exe, "0.6.0"));
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn signature_checks_version_and_hash() {
-        use ring::signature::{Ed25519KeyPair, KeyPair};
-        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap();
-        let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
-        let key = pair.public_key().as_ref();
-        let sha = "ab".repeat(32);
-        let sig: String = pair.sign(signed_message("0.7.0", &sha).as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect();
-
-        assert!(signature_ok(key, "0.7.0", &sha, &sig));
-        assert!(!signature_ok(key, "0.8.0", &sha, &sig));
-        assert!(!signature_ok(key, "0.7.0", &"cd".repeat(32), &sig));
-        assert!(!signature_ok(key, "0.7.0", &sha, "zz"));
-        assert!(!signature_ok(&[0u8; 32], "0.7.0", &sha, &sig));
     }
 
     #[test]

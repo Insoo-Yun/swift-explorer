@@ -3522,7 +3522,6 @@ dependencies = [
  "raw-window-handle",
  "rayon",
  "resvg",
- "ring",
  "serde",
  "serde_json",
  "sha2",
