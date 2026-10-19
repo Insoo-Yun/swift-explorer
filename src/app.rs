@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,8 @@ struct Config {
     /// Pencere kapanınca süreç gizlenip bekler, sonraki açılış anında olur (Windows)
     background: bool,
     auto_update: bool,
+    /// Son güncelleme denetimi, Unix saniyesi. Uygulamayı sık açıp kapamak istek yağdırmasın.
+    last_update_check: u64,
     /// Varsayılan dosya yöneticisi yapılmadan önceki uygulama (Linux'ta geri yüklemek için)
     previous_folder_app: Option<String>,
 }
@@ -70,6 +72,7 @@ impl Default for Config {
             grouped: dirs::download_dir().into_iter().collect(),
             background: true,
             auto_update: true,
+            last_update_check: 0,
             previous_folder_app: None,
         }
     }
@@ -87,18 +90,31 @@ fn load_config() -> Config {
         .unwrap_or_default()
 }
 
-/// Açılıştan biraz sonra ve 6 saatte bir yeni sürümü denetler. Pencere gizliyken de çalışır:
-/// yeni sürüm kurulunca gizli süreç onu arka planda başlatıp çıkar. `enabled` yoksa denetlemez.
-fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, ctx: egui::Context) -> std::sync::mpsc::Receiver<crate::update::Found> {
+const UPDATE_INTERVAL: u64 = 3600;
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Son denetimden bu yana bir saat geçtiyse yeni sürümü denetler: açılıştan biraz sonra,
+/// saatte bir ve dönen kanala sinyal gelince, yani pencere yeniden açılınca. Pencere gizliyken
+/// de çalışır: yeni sürüm kurulunca gizli süreç onu arka planda başlatıp çıkar. `enabled` yoksa denetlemez.
+fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, last_check: Arc<AtomicU64>, ctx: egui::Context) -> (std::sync::mpsc::Receiver<crate::update::Found>, std::sync::mpsc::Sender<()>) {
     let (tx, rx) = std::sync::mpsc::channel();
-    let Some(enabled) = enabled.filter(|_| crate::update::enabled()) else { return rx };
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
+    let Some(enabled) = enabled.filter(|_| crate::update::enabled()) else { return (rx, wake_tx) };
     std::thread::spawn(move || {
         crate::update::remove_old();
         // Açılışla yarışmasın
         std::thread::sleep(Duration::from_secs(15));
         let mut told = None;
         loop {
-            if enabled.load(Relaxed) {
+            let now = unix_now();
+            let last = last_check.load(Relaxed);
+            // Saat geri alındıysa da denetle
+            let due = now < last || now - last >= UPDATE_INTERVAL;
+            if enabled.load(Relaxed) && due {
+                last_check.store(now, Relaxed);
                 match crate::update::check() {
                     Ok(Some(crate::update::Found::Installed(v))) => {
                         if !fsutil::jobs_running() && win::take_parked() {
@@ -120,10 +136,16 @@ fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, ctx: egui::Context) ->
                     Err(e) => eprintln!("güncelleme denetlenemedi: {e}"),
                 }
             }
-            std::thread::sleep(Duration::from_secs(6 * 3600));
+            // Bütün kopyalar aynı dakikada sormasın diye 10 dakikaya kadar rastgele kaydır
+            use std::hash::BuildHasher;
+            let jitter = std::collections::hash_map::RandomState::new().hash_one(now) % 600;
+            let next = if enabled.load(Relaxed) { (last_check.load(Relaxed) + UPDATE_INTERVAL).saturating_sub(unix_now()).min(UPDATE_INTERVAL) } else { UPDATE_INTERVAL };
+            if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) = wake_rx.recv_timeout(Duration::from_secs(next + jitter)) {
+                return;
+            }
         }
     });
-    rx
+    (rx, wake_tx)
 }
 
 /// Açılacak sekmeler ve etkin olanın sırası
@@ -297,6 +319,9 @@ pub struct App {
     /// Arka plandaki denetleyici okur; kapatılınca bir sonraki denetim atlanır
     auto_update: Arc<AtomicBool>,
     update_rx: std::sync::mpsc::Receiver<crate::update::Found>,
+    /// Güncelleme denetleyicisini uyandırır
+    update_wake: std::sync::mpsc::Sender<()>,
+    last_update_check: Arc<AtomicU64>,
     /// Yeni sürüm kuruldu: pencere kapanınca gizlenmek yerine yeni sürüm başlatılır
     update_installed: bool,
     /// Oturum açılışında başladı: pencere hiç gösterilmeden beklemeye geçer
@@ -1058,7 +1083,8 @@ impl App {
         let resident = win::serve(ctx.clone());
         let auto_update = Arc::new(AtomicBool::new(cfg.auto_update));
         // Aynı anda tek süreç güncellesin: sonraki açılışları karşılayan süreç
-        let update_rx = spawn_update_checker((resident || !cfg!(windows)).then(|| auto_update.clone()), ctx.clone());
+        let last_update_check = Arc::new(AtomicU64::new(cfg.last_update_check));
+        let (update_rx, update_wake) = spawn_update_checker((resident || !cfg!(windows)).then(|| auto_update.clone()), last_update_check.clone(), ctx.clone());
         // Yalnızca etkin sekme hemen yüklenir; diğerleri ilk açıldıklarında
         let tabs = paths.into_iter().enumerate().map(|(i, p)| if i == active { Tab::new(p, &ctx) } else { Tab::new_lazy(p) }).collect();
 
@@ -1084,6 +1110,8 @@ impl App {
             default_fm: None,
             auto_update,
             update_rx,
+            update_wake,
+            last_update_check,
             update_installed: false,
             start_hidden: hidden,
             known: known_folders(),
@@ -1164,6 +1192,7 @@ impl App {
             grouped: self.grouped.clone(),
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
+            last_update_check: self.last_update_check.load(Relaxed),
             previous_folder_app: self.previous_folder_app.clone(),
         };
         if let Some(p) = config_path() {
@@ -1276,6 +1305,7 @@ impl App {
             }
         }
         self.refresh_drives();
+        let _ = self.update_wake.send(());
     }
 
     fn toast(&mut self, msg: impl Into<String>, error: bool) {
