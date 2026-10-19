@@ -8,8 +8,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const LATEST: &str = "https://api.github.com/repos/misutesu-desu/swift-explorer/releases/latest";
-const ASSET: &str = "SwiftExplorer.exe";
+/// Her sürümle yayınlanan bilgi dosyası. API'ye gitmediği için istek sınırına takılmaz.
+const LATEST: &str = "https://github.com/misutesu-desu/swift-explorer/releases/latest/download/latest.json";
 
 /// Güncellemeyi kuran gizli süreç bu bayrakla yeni sürümü başlatır; yeni süreç
 /// eskisinin çıkmasını bekleyip arka planda bekler.
@@ -23,17 +23,16 @@ pub enum Found {
 }
 
 #[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    html_url: String,
-    assets: Vec<Asset>,
+struct Manifest {
+    version: String,
+    page: String,
+    windows: Option<Binary>,
 }
 
 #[derive(Deserialize)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
-    digest: Option<String>,
+struct Binary {
+    url: String,
+    sha256: String,
 }
 
 /// "v0.5.1" > "0.5.0"; sayı olmayan etiketler yeni sayılmaz
@@ -72,31 +71,27 @@ pub fn check() -> Result<Option<Found>, String> {
     agent()
         .get(LATEST)
         .set("User-Agent", &ua)
-        .set("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| e.to_string())?
         .into_reader()
-        .take(4 << 20)
+        .take(64 << 10)
         .read_to_end(&mut body)
         .map_err(|e| e.to_string())?;
-    let rel: Release = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    if !newer(&rel.tag_name, env!("CARGO_PKG_VERSION")) {
+    let m: Manifest = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    if !newer(&m.version, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
     }
-    let version = rel.tag_name.trim_start_matches('v').to_string();
-    let available = Ok(Some(Found::Available(version.clone(), rel.html_url.clone())));
+    let available = Ok(Some(Found::Available(m.version.clone(), m.page.clone())));
     if !cfg!(windows) {
         return available;
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let asset = rel.assets.iter().find(|a| a.name == ASSET);
-    let sha = asset.and_then(|a| a.digest.as_deref()?.strip_prefix("sha256:"));
-    let (Some(asset), Some(sha)) = (asset, sha) else { return available };
+    let Some(bin) = &m.windows else { return available };
     if is_dev_build(&exe) {
         return available;
     }
-    match install(&exe, &asset.browser_download_url, sha, &ua) {
-        Ok(()) => Ok(Some(Found::Installed(version))),
+    match install(&exe, &bin.url, &bin.sha256, &ua) {
+        Ok(()) => Ok(Some(Found::Installed(m.version))),
         // Program Files gibi yazılamayan bir klasör: kullanıcı kendisi indirir
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => available,
         Err(e) => Err(e.to_string()),
