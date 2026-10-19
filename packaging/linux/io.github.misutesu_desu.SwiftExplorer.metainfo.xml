@@ -41,6 +41,17 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.7.0" date="2026-10-19">
+      <description>
+        <p>The app can be the default file manager, and search works on This PC.</p>
+        <ul>
+          <li>View has an option to open folders and drives in this app. On Windows Win+E opens it too.</li>
+          <li>USB drives show up a second after they are plugged in instead of up to 20 seconds later.</li>
+          <li>On This PC, Enter searches every drive, and typing filters the drive list.</li>
+          <li>Updates are checked every hour and when the window is reopened. If a new version fails to start twice, the previous one is put back.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-18">
       <description>
         <p>A Properties window on Linux, and a quicker, self-updating Windows version.</p>
