@@ -2988,7 +2988,9 @@ impl App {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(6.0);
             if self.page_group(ui, "drives", crate::i18n::t("Cihazlar ve sürücüler")) {
-                let drives = self.drives.lock().unwrap().clone();
+                // Yazarken sürücüleri süz; Enter tüm sürücülerde arar
+                let pat = fsutil::Pattern::new(&self.tabs[self.active].filter);
+                let drives: Vec<DriveInfo> = self.drives.lock().unwrap().iter().filter(|d| pat.matches(&d.label.to_lowercase())).cloned().collect();
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     ui.add_space(10.0);
