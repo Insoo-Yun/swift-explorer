@@ -27,6 +27,11 @@ pub struct DriveInfo {
     pub total: u64,
 }
 
+/// Takılı sürücü harflerinin bit maskesi. USB takılıp çıkarılınca değişir, ucuzdur.
+pub fn drive_mask() -> u64 {
+    unsafe { GetLogicalDrives() as u64 }
+}
+
 pub fn drives() -> Vec<DriveInfo> {
     let mask = unsafe { GetLogicalDrives() };
     let mut out = Vec::new();

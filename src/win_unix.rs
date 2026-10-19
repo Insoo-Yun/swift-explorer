@@ -48,6 +48,14 @@ pub fn mount_roots() -> Vec<PathBuf> {
     v
 }
 
+/// Bağlama noktalarının özeti. Disk takılıp çıkarılınca değişir.
+pub fn drive_mask() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    mount_roots().hash(&mut h);
+    h.finish()
+}
+
 pub fn drives() -> Vec<DriveInfo> {
     mount_roots()
         .into_iter()

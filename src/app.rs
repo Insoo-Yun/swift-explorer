@@ -1128,6 +1128,7 @@ impl App {
             ctx,
         };
         app.refresh_drives();
+        app.watch_drives();
         app
     }
 
@@ -1185,6 +1186,25 @@ impl App {
             let d = win::drives();
             *store.lock().unwrap() = d;
             ctx.request_repaint();
+        });
+    }
+
+    /// USB bellek takılınca listeyi hemen yeniler. 20 saniyelik yenilemeyi beklemesin diye
+    /// sürücü maskesine saniyede bir bakar; maske değişmedikçe arayüzü uyandırmaz.
+    fn watch_drives(&self) {
+        let store = self.drives.clone();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let mut last = win::drive_mask();
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let mask = win::drive_mask();
+                if mask != last {
+                    last = mask;
+                    *store.lock().unwrap() = win::drives();
+                    ctx.request_repaint();
+                }
+            }
         });
     }
 
