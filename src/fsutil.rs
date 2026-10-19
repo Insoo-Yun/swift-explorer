@@ -391,13 +391,13 @@ pub struct SearchHandle {
     pub scanned: Arc<AtomicU64>,
 }
 
-pub fn spawn_search(root: PathBuf, pattern: Pattern, ctx: egui::Context) -> SearchHandle {
+pub fn spawn_search(roots: Vec<PathBuf>, pattern: Pattern, ctx: egui::Context) -> SearchHandle {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let scanned = Arc::new(AtomicU64::new(0));
     let (c, s) = (cancel.clone(), scanned.clone());
     thread::spawn(move || {
-        search_dir(&root, &pattern, &tx, &c, &s);
+        roots.par_iter().for_each(|r| search_dir(r, &pattern, &tx, &c, &s));
         let _ = tx.send(SearchMsg::Done);
         ctx.request_repaint();
     });

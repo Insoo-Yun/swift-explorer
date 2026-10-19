@@ -179,6 +179,11 @@ impl Tab {
         self.path.as_os_str() == THIS_PC
     }
 
+    /// Dosya listesi gösteriliyor: gerçek klasör ya da arama sonuçları
+    pub fn lists_files(&self) -> bool {
+        !self.is_home() || self.search.is_some()
+    }
+
     pub fn is_loading(&self) -> bool {
         self.loader.is_some()
     }
@@ -233,8 +238,7 @@ impl Tab {
 
     pub fn go_up(&mut self, ctx: &egui::Context) {
         if self.search.is_some() {
-            self.cancel_search();
-            self.load(true, ctx);
+            self.exit_search(ctx);
             return;
         }
         if self.is_home() {
@@ -289,7 +293,8 @@ impl Tab {
         }
     }
 
-    pub fn start_search(&mut self, ctx: &egui::Context) {
+    /// `roots`: aranacak klasörler. Bu bilgisayar'da bunlar sürücü kökleridir.
+    pub fn start_search(&mut self, roots: Vec<PathBuf>, ctx: &egui::Context) {
         let pattern = Pattern::new(&self.filter);
         if pattern.is_empty() {
             return;
@@ -303,7 +308,7 @@ impl Tab {
         self.view_dirty = true;
         self.search = Some(Search {
             query: self.filter.trim().to_string(),
-            handle: fsutil::spawn_search(self.path.clone(), pattern, ctx.clone()),
+            handle: fsutil::spawn_search(roots, pattern, ctx.clone()),
             done: false,
             started: Instant::now(),
             elapsed: Duration::ZERO,
@@ -321,7 +326,15 @@ impl Tab {
     pub fn exit_search(&mut self, ctx: &egui::Context) {
         if self.search.is_some() {
             self.cancel_search();
-            self.load(true, ctx);
+            if self.is_home() {
+                // Bu bilgisayar'da yüklenecek klasör yok, sonuçları elle temizle
+                self.entries.clear();
+                self.selection.clear();
+                self.cursor = None;
+                self.view_dirty = true;
+            } else {
+                self.load(true, ctx);
+            }
         }
     }
 

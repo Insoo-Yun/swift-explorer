@@ -1416,7 +1416,7 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let typing = ctx.wants_keyboard_input();
         let focused = ctx.input(|i| i.focused);
-        let home = self.tabs[self.active].is_home();
+        let home = !self.tabs[self.active].lists_files();
 
         // Ctrl+V: panoda metin yoksa egui olay üretmez, doğrudan klavyeyi soruyoruz.
         let v = focused && win::ctrl_v_down();
@@ -1887,7 +1887,8 @@ impl App {
             }
             Action::StartSearch => {
                 self.renaming = None;
-                self.tab().start_search(&ctx);
+                let roots = if self.tab().is_pc() { self.drives.lock().unwrap().iter().map(|d| d.root.clone()).collect() } else { vec![self.tab().path.clone()] };
+                self.tab().start_search(roots, &ctx);
             }
             Action::ExitSearch => self.tab().exit_search(&ctx),
             Action::Sort(k) => {
@@ -2188,8 +2189,8 @@ impl App {
                     t.view_dirty = true;
                 }
                 if submit {
-                    if t.is_home() {
-                        let p = expand_path(t.filter.trim());
+                    let p = expand_path(t.filter.trim());
+                    if t.is_home() && (p.exists() || !t.is_pc()) {
                         t.filter.clear();
                         if p.exists() {
                             actions.push(Action::Navigate(p));
@@ -3806,7 +3807,7 @@ impl App {
         let (sel, cur_path, count, home) = {
             let t = &self.tabs[self.active];
             let sel: Vec<Entry> = t.selected_entries().into_iter().cloned().collect();
-            (sel, t.path.clone(), t.view.len(), t.is_home())
+            (sel, t.path.clone(), t.view.len(), !t.lists_files())
         };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             ui.add_space(8.0);
@@ -3918,12 +3919,12 @@ impl App {
                 ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.text));
             };
             let t = &self.tabs[self.active];
-            let count = if t.is_pc() { self.drives.lock().unwrap().len() } else if t.is_home() { 0 } else { t.view.len() };
-            if !t.is_home() || t.is_pc() {
+            let count = if t.lists_files() { t.view.len() } else if t.is_pc() { self.drives.lock().unwrap().len() } else { 0 };
+            if t.lists_files() || t.is_pc() {
                 ui.label(crate::i18n::tf("{} öğe", &[&fmt_count(count)]));
                 bar(ui);
             }
-            if !t.is_home() {
+            if t.lists_files() {
                 let sel = t.view.iter().filter(|i| t.selection.contains(i)).count();
                 if !t.filter.is_empty() && t.search.is_none() {
                     ui.label(RichText::new(crate::i18n::tf("(filtre: {} / {})", &[&t.view.len(), &t.entries.len()])).color(p.weak));
@@ -4431,12 +4432,12 @@ impl eframe::App for App {
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(pl.content).inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 0 })).show(ctx, |ui| {
             let t = &self.tabs[self.active];
-            if t.is_pc() {
-                self.pc_page(ui, &mut actions);
-            } else if t.is_home() {
-                self.home_page(ui, &mut actions);
-            } else {
+            if t.lists_files() {
                 self.file_area(ui, &mut actions);
+            } else if t.is_pc() {
+                self.pc_page(ui, &mut actions);
+            } else {
+                self.home_page(ui, &mut actions);
             }
         });
 
