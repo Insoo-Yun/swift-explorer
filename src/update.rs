@@ -117,6 +117,10 @@ pub fn check() -> Result<Option<Found>, String> {
     if is_dev_build(&exe) {
         return available;
     }
+    // Bu sürüm açılışta çöktüğü için geri alındı; kullanıcı isterse kendisi indirir
+    if std::fs::read_to_string(with_ext(&exe, ".skip")).is_ok_and(|v| v.trim() == m.version) {
+        return available;
+    }
     if !signature_ok(&PUBLIC_KEY, &m.version, &bin.sha256, &bin.sig) {
         return Err("güncelleme imzası geçersiz".into());
     }
@@ -137,8 +141,62 @@ fn with_ext(exe: &Path, ext: &str) -> PathBuf {
 /// Önceki güncellemeden kalan eski exe; onu çalıştıran süreç kapandıysa silinebilir
 pub fn remove_old() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(with_ext(&exe, ".old"));
+        // Yeni sürüm açıldığını doğrulamadıysa eski exe geri dönüş için kalsın
+        if !with_ext(&exe, ".pending").exists() {
+            let _ = std::fs::remove_file(with_ext(&exe, ".old"));
+            let _ = std::fs::remove_file(with_ext(&exe, ".bad"));
+        }
     }
+}
+
+/// Kurulan sürüm bu kadar başlangıçta ilk karesini çizemezse eskisine dönülür
+const MAX_FAILED_STARTS: u32 = 2;
+
+/// Yeni sürüm her başlangıçta `.pending` sayacını artırır, `confirm_started` onu siler.
+/// Sayaç sınırdaysa yeni sürüm açılışta çöküyordur: eski exe geri konur ve başlatılır.
+pub fn startup_guard() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    if roll_back_if_failing(&exe, env!("CARGO_PKG_VERSION")) {
+        let _ = std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn();
+        std::process::exit(0);
+    }
+}
+
+fn roll_back_if_failing(exe: &Path, version: &str) -> bool {
+    let pending = with_ext(exe, ".pending");
+    let Ok(text) = std::fs::read_to_string(&pending) else { return false };
+    let starts: u32 = text.trim().parse().unwrap_or(0);
+    let old = with_ext(exe, ".old");
+    if !old.exists() {
+        let _ = std::fs::remove_file(&pending);
+        return false;
+    }
+    if starts >= MAX_FAILED_STARTS {
+        let bad = with_ext(exe, ".bad");
+        let _ = std::fs::remove_file(&bad);
+        if std::fs::rename(exe, &bad).is_ok() {
+            if std::fs::rename(&old, exe).is_ok() {
+                let _ = std::fs::write(with_ext(exe, ".skip"), version);
+                let _ = std::fs::remove_file(&pending);
+                return true;
+            }
+            let _ = std::fs::rename(&bad, exe);
+        }
+    }
+    let _ = std::fs::write(&pending, (starts + 1).to_string());
+    false
+}
+
+/// Yeni sürüm ilk karesini çizdi, geri dönüş gerekmez
+pub fn confirm_started() {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        if let Ok(exe) = std::env::current_exe() {
+            if std::fs::remove_file(with_ext(&exe, ".pending")).is_ok() {
+                remove_old();
+            }
+        }
+    });
 }
 
 fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
@@ -171,6 +229,7 @@ fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
             let _ = std::fs::rename(&old, exe);
             return Err(e);
         }
+        std::fs::write(with_ext(exe, ".pending"), "0")?;
         Ok(())
     })();
     if res.is_err() {
@@ -188,7 +247,7 @@ pub fn launch_hidden() {
 
 #[cfg(test)]
 mod tests {
-    use super::{install, newer, signature_ok, signed_message, with_ext};
+    use super::{install, newer, roll_back_if_failing, signature_ok, signed_message, with_ext};
 
     /// Ağ gerektirir: cargo test -- --ignored
     #[test]
@@ -208,6 +267,27 @@ mod tests {
         install(&exe, url, sha, "test").unwrap();
         assert_eq!(std::fs::read(with_ext(&exe, ".old")).unwrap(), b"old");
         assert_eq!(std::fs::metadata(&exe).unwrap().len(), 7398912);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rolls_back_after_two_failed_starts() {
+        let dir = std::env::temp_dir().join(format!("swift-rollback-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("SwiftExplorer.exe");
+        std::fs::write(&exe, b"new").unwrap();
+        std::fs::write(with_ext(&exe, ".old"), b"old").unwrap();
+        std::fs::write(with_ext(&exe, ".pending"), "0").unwrap();
+
+        assert!(!roll_back_if_failing(&exe, "0.7.0"));
+        assert!(!roll_back_if_failing(&exe, "0.7.0"));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+        assert!(roll_back_if_failing(&exe, "0.7.0"));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+        assert_eq!(std::fs::read(with_ext(&exe, ".bad")).unwrap(), b"new");
+        assert_eq!(std::fs::read_to_string(with_ext(&exe, ".skip")).unwrap(), "0.7.0");
+        assert!(!with_ext(&exe, ".pending").exists());
+        assert!(!roll_back_if_failing(&exe, "0.6.0"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

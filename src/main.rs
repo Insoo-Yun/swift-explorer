@@ -42,6 +42,8 @@ fn main() -> eframe::Result<()> {
     if hidden && win::is_serving() || !hidden && win::hand_off(start.as_deref()) {
         return Ok(());
     }
+    // Açılışı başka sürece devredenler sayılmasın diye burada
+    update::startup_guard();
     // İlk çalıştırmada (kayıtlı pencere konumu yoksa) ekranı kaplayarak aç
     let first_run = eframe::storage_dir(APP_NAME).is_none_or(|d| !d.join("app.ron").exists());
     let options = eframe::NativeOptions {

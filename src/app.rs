@@ -4338,6 +4338,9 @@ impl eframe::App for App {
         let mut actions = Vec::new();
         self.images.poll(ctx);
         self.reveal_when_ready(ctx);
+        if self.revealed {
+            crate::update::confirm_started();
+        }
 
         self.tabs[self.active].ensure_loaded(ctx);
         self.poll_subdirs();
