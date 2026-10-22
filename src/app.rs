@@ -327,6 +327,8 @@ pub struct App {
     /// Oturum açılışında başladı: pencere hiç gösterilmeden beklemeye geçer
     #[cfg_attr(not(windows), allow(dead_code))]
     start_hidden: bool,
+    /// Son sağlam pencere konumu ve boyutu, eframe'in kayıt biçiminde
+    window_state: Option<String>,
     /// Bilinen klasörler (Masaüstü, İndirilenler…) — açılışta bir kez
     known: Vec<(&'static str, &'static str, PathBuf)>,
     /// Gezinti bölmesinde açık düğümler
@@ -1114,6 +1116,7 @@ impl App {
             last_update_check,
             update_installed: false,
             start_hidden: hidden,
+            window_state: cc.storage.and_then(|s| s.get_string(WINDOW_KEY)),
             known: known_folders(),
             tree_open: Default::default(),
             drives: Arc::new(Mutex::new(vec![])),
@@ -4295,6 +4298,9 @@ fn resize_edges(ctx: &egui::Context) {
     }
 }
 
+/// eframe'in pencere konumunu sakladığı anahtar
+const WINDOW_KEY: &str = "window";
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(feature = "screenshot")]
@@ -4514,6 +4520,22 @@ impl eframe::App for App {
         if let Some(pos) = self.inject_release.take() {
             raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: raw.modifiers });
             raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: raw.modifiers });
+        }
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // eframe pencere konumunu bundan hemen önce yazar. Simge durumundaki pencerede
+        // boyut 0, konum -32000 gelir; bu kalırsa sonraki açılış köşede minicik başlar.
+        let broken = self.ctx.input(|i| {
+            let v = i.viewport();
+            v.minimized == Some(true) || v.inner_rect.is_some_and(|r| r.width() < 640.0 || r.height() < 400.0)
+        });
+        if broken {
+            if let Some(w) = &self.window_state {
+                storage.set_string(WINDOW_KEY, w.clone());
+            }
+        } else {
+            self.window_state = storage.get_string(WINDOW_KEY);
         }
     }
 
