@@ -3932,17 +3932,18 @@ impl App {
                 }
                 row(crate::i18n::t("Konum"), e.path.parent().map(|p| p.display().to_string()).unwrap_or_default());
             });
-            if e.is_dir || thumb || e.size == 0 {
+            if thumb || (!e.is_dir && e.size == 0) {
                 return;
             }
-            // Metin önizlemesi (arka planda okunur)
+            // Metin ya da klasör önizlemesi (arka planda okunur)
             if self.preview.path.as_ref() != Some(&e.path) {
                 self.preview.path = Some(e.path.clone());
                 *self.preview.data.lock().unwrap() = None;
                 let store = self.preview.data.clone();
                 let p = e.path.clone();
+                let show_hidden = self.show_hidden;
                 std::thread::spawn(move || {
-                    let d = fsutil::read_preview(&p);
+                    let d = if e.is_dir { fsutil::read_folder_preview(&p, show_hidden, 200) } else { fsutil::read_preview(&p) };
                     *store.lock().unwrap() = Some((p, d));
                     ctx.request_repaint();
                 });
@@ -3964,6 +3965,27 @@ impl App {
                             ui.add(egui::Label::new(RichText::new(s.as_str()).monospace()).extend());
                         });
                     });
+                }
+            }
+            if let Some((p, PreviewData::Folder(items, total))) = data.as_ref() {
+                if p == &e.path {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(crate::i18n::t("İçindekiler")).strong());
+                    ui.separator();
+                    if items.is_empty() {
+                        ui.label(RichText::new(crate::i18n::t("Bu klasör boş.")).weak());
+                    }
+                    for it in items {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), Sense::hover());
+                        let icon = Rect::from_center_size(Pos2::new(rect.left() + 10.0, rect.center().y), egui::vec2(16.0, 16.0));
+                        draw_icon(ui.painter(), &mut self.images, &it.path, it.is_dir, &it.ext, icon);
+                        let font = egui::FontId::proportional(14.0);
+                        let galley = ui.painter().layout_no_wrap(it.name.clone(), font, ui.visuals().text_color());
+                        ui.painter().with_clip_rect(rect).galley(Pos2::new(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0), galley, ui.visuals().text_color());
+                    }
+                    if *total > items.len() {
+                        ui.label(RichText::new(crate::i18n::tf("… ve {} öğe daha", &[&(total - items.len())])).weak());
+                    }
                 }
             }
         });
