@@ -4296,10 +4296,10 @@ impl App {
                         } else if resp.hovered() {
                             painter.rect_filled(rect, 4.0, p.hover);
                         }
-                        painter.text(rect.left_center() + egui::vec2(12.0, 0.0), Align2::LEFT_CENTER, name, egui::FontId::proportional(14.0), p.text);
-                        if !keys.is_empty() {
-                            painter.text(rect.right_center() - egui::vec2(10.0, 0.0), Align2::RIGHT_CENTER, keys, egui::FontId::proportional(12.0), p.weak);
-                        }
+                        let keys_rect = painter.text(rect.right_center() - egui::vec2(10.0, 0.0), Align2::RIGHT_CENTER, keys, egui::FontId::proportional(12.0), p.weak);
+                        // Ad uzunsa sağdaki kısayolun ya da yolun üstüne taşmasın
+                        let name_clip = rect.with_max_x(if keys.is_empty() { rect.right() } else { keys_rect.left() - 12.0 });
+                        painter.with_clip_rect(name_clip).text(rect.left_center() + egui::vec2(12.0, 0.0), Align2::LEFT_CENTER, name, egui::FontId::proportional(14.0), p.text);
                         if resp.clicked() {
                             run = Some(i);
                         }
