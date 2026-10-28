@@ -384,7 +384,8 @@ pub struct App {
     inject_release: Option<Pos2>,
     accent: Color32,
     zoom_acc: f32,
-    marquee: Option<Pos2>,
+    /// Seçim dikdörtgeninin başladığı sekme ve nokta
+    marquee: Option<(usize, Pos2)>,
     item_rects: Vec<(usize, Rect)>,
     grid_scroll: (f32, f32),
     silent_jobs: Vec<usize>,
@@ -2982,7 +2983,7 @@ impl App {
         let id = egui::Id::new(("page_group", key));
         let open = !ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
-        if group_header(ui, rect.with_max_x(rect.left() + 260.0), label, open, id.with("h")).clicked() {
+        if group_header(ui, rect.with_max_x(rect.left() + 260.0), label, open, ui.id().with(("page_group", key))).clicked() {
             ui.ctx().data_mut(|d| d.insert_temp(id, open));
         }
         open
@@ -3433,12 +3434,12 @@ impl App {
         };
 
         // Boş alan: tık seçimi temizler, sürükleme seçim dikdörtgeni çizer, sağ tık klasör menüsü
-        let bg = ui.interact(ui.max_rect(), egui::Id::new("list_bg"), Sense::click_and_drag());
+        let bg = ui.interact(ui.max_rect(), ui.id().with("list_bg"), Sense::click_and_drag());
         if bg.clicked() {
             self.tab().selection.clear();
         }
         if bg.drag_started() {
-            self.marquee = bg.interact_pointer_pos();
+            self.marquee = bg.interact_pointer_pos().map(|p| (self.active, p));
             if !ui.input(|i| i.modifiers.ctrl) {
                 self.tab().selection.clear();
             }
@@ -3491,7 +3492,7 @@ impl App {
         }
 
         // Seçim dikdörtgeni
-        if let Some(start) = self.marquee {
+        if let Some((_, start)) = self.marquee.filter(|(tab, _)| *tab == self.active) {
             if bg.dragged() {
                 if let Some(now) = ui.input(|i| i.pointer.latest_pos()) {
                     let r = Rect::from_two_pos(start, now);
@@ -3642,7 +3643,7 @@ impl App {
                             let g = &t.groups[gi];
                             row.col(|ui| {
                                 let rect = ui.max_rect().with_max_x(ui.max_rect().left() + 260.0);
-                                if group_header(ui, rect, crate::i18n::t(&g.label), !g.collapsed, egui::Id::new(("ghead", &g.label))).clicked() {
+                                if group_header(ui, rect, crate::i18n::t(&g.label), !g.collapsed, ui.id().with(("ghead", &g.label))).clicked() {
                                     toggle_group = Some(g.label.clone());
                                 }
                             });
@@ -3824,7 +3825,7 @@ impl App {
                 let (row_start, row_end) = match line {
                     GLine::Head(gi) => {
                         let g = &t.groups[*gi];
-                        if group_header(ui, line_rect.with_max_x(line_rect.left() + 260.0).shrink2(egui::vec2(0.0, 3.0)), crate::i18n::t(&g.label), !g.collapsed, egui::Id::new(("ghead", &g.label))).clicked() {
+                        if group_header(ui, line_rect.with_max_x(line_rect.left() + 260.0).shrink2(egui::vec2(0.0, 3.0)), crate::i18n::t(&g.label), !g.collapsed, ui.id().with(("ghead", &g.label))).clicked() {
                             toggle_group = Some(g.label.clone());
                         }
                         continue;
