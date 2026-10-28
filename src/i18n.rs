@@ -491,6 +491,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Komut adı yazın", "Type a command name"),
     ("Eşleşen komut yok", "No matching commands"),
     ("Komut paleti: bütün komutları adıyla ara ★", "Command palette: find any command by name ★"),
+    ("Bu klasörün bulunduğu git deposunun etkin dalı", "Current branch of the git repository this folder is in"),
 ];
 
 #[cfg(test)]

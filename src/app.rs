@@ -367,6 +367,8 @@ pub struct App {
     hwnd: Option<isize>,
     renaming: Option<Renaming>,
     undo: Vec<UndoOp>,
+    /// Etkin klasör ve içinde bulunduğu git deposunun dalı
+    git_branch: (PathBuf, Option<String>),
     /// Alt klasör listeleri (gezinti ağacı, adres çubuğu). Arka planda okunur; paylaşımlı
     /// tutulur ki her karede kopyalanmasın.
     subdirs: HashMap<PathBuf, Arc<[PathBuf]>>,
@@ -1152,6 +1154,7 @@ impl App {
             type_names: HashMap::new(),
             hwnd: None,
             renaming: None,
+            git_branch: (PathBuf::new(), None),
             undo: vec![],
             subdirs: HashMap::new(),
             subdirs_pending: Default::default(),
@@ -1764,6 +1767,7 @@ impl App {
             Action::Forward => self.tab().go_forward(&ctx),
             Action::Refresh => {
                 self.subdirs.clear();
+                self.git_branch.0 = PathBuf::new();
                 let t = self.tab();
                 if t.search.is_none() {
                     t.refresh_free_space(&ctx);
@@ -3975,6 +3979,10 @@ impl App {
                 ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.text));
             };
             let t = &self.tabs[self.active];
+            if self.git_branch.0 != t.path {
+                let branch = if t.lists_files() && t.search.is_none() { fsutil::git_branch(&t.path) } else { None };
+                self.git_branch = (t.path.clone(), branch);
+            }
             let count = if t.lists_files() { t.view.len() } else if t.is_pc() { self.drives.lock().unwrap().len() } else { 0 };
             if t.lists_files() || t.is_pc() {
                 ui.label(crate::i18n::tf("{} öğe", &[&fmt_count(count)]));
@@ -4022,6 +4030,10 @@ impl App {
                 }
                 if toggle(ui, g::LIST, !grid).on_hover_text(crate::i18n::t("Ayrıntılar (Ctrl+Shift+6)")).clicked() {
                     actions.push(Action::SetView(0));
+                }
+                if let Some(b) = &self.git_branch.1 {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(format!("git: {b}")).color(p.weak)).on_hover_text(crate::i18n::t("Bu klasörün bulunduğu git deposunun etkin dalı"));
                 }
             });
         });

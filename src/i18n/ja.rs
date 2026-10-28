@@ -332,4 +332,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Komut adı yazın", "コマンド名を入力"),
     ("Eşleşen komut yok", "一致するコマンドはありません"),
     ("Komut paleti: bütün komutları adıyla ara ★", "コマンド パレット: 名前で任意のコマンドを検索 ★"),
+    ("Bu klasörün bulunduğu git deposunun etkin dalı", "このフォルダーを含む git リポジトリの現在のブランチ"),
 ];
