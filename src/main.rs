@@ -6,6 +6,7 @@ mod desktop_apps;
 mod fsutil;
 mod i18n;
 mod images;
+mod palette;
 #[cfg(not(windows))]
 mod properties;
 mod scheme;
