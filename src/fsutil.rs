@@ -565,6 +565,8 @@ pub enum JobKind {
     Delete,
     Size,
     Restore,
+    /// Zip açma ya da oluşturma; tek çifti oluşan klasör ya da dosyadır
+    Archive,
 }
 
 /// Hedefte aynı adda öğe varsa ne yapılacağı
@@ -602,7 +604,7 @@ pub fn jobs_running() -> bool {
 }
 
 impl Job {
-    fn new(label: String, kind: JobKind) -> Arc<Job> {
+    pub(crate) fn new(label: String, kind: JobKind) -> Arc<Job> {
         RUNNING.fetch_add(1, Relaxed);
         Arc::new(Job {
             label,
@@ -621,11 +623,11 @@ impl Job {
             pairs: Mutex::new(Vec::new()),
         })
     }
-    fn finish(&self) {
+    pub(crate) fn finish(&self) {
         self.finished.store(true, Relaxed);
         RUNNING.fetch_sub(1, Relaxed);
     }
-    fn err(&self, e: String) {
+    pub(crate) fn err(&self, e: String) {
         self.errors.lock().unwrap().push(e);
     }
     fn interrupted(&self) -> io::Result<()> {
