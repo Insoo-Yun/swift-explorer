@@ -326,4 +326,10 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Diğer uygulamalar", "Другие приложения"),
     ("Bu dosya türü için varsayılan uygulamayı seçin: {}", "Выберите приложение по умолчанию для этого типа файлов: {}"),
     ("Yükleniyor…", "Загрузка…"),
+    ("Adres çubuğu", "Адресная строка"),
+    ("Ara", "Поиск"),
+    ("Yeni metin belgesi", "Новый текстовый документ"),
+    ("Komut adı yazın", "Введите название команды"),
+    ("Eşleşen komut yok", "Нет подходящих команд"),
+    ("Komut paleti: bütün komutları adıyla ara ★", "Палитра команд: поиск любой команды по названию ★"),
 ];

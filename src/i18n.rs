@@ -485,6 +485,12 @@ static TABLE: &[(&str, &str)] = &[
     ("Diğer uygulamalar", "Other apps"),
     ("Bu dosya türü için varsayılan uygulamayı seçin: {}", "Choose the default app for this file type: {}"),
     ("Yükleniyor…", "Loading…"),
+    ("Adres çubuğu", "Address bar"),
+    ("Ara", "Search"),
+    ("Yeni metin belgesi", "New text document"),
+    ("Komut adı yazın", "Type a command name"),
+    ("Eşleşen komut yok", "No matching commands"),
+    ("Komut paleti: bütün komutları adıyla ara ★", "Command palette: find any command by name ★"),
 ];
 
 #[cfg(test)]

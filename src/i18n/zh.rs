@@ -326,4 +326,10 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Diğer uygulamalar", "其他应用"),
     ("Bu dosya türü için varsayılan uygulamayı seçin: {}", "为此文件类型选择默认应用：{}"),
     ("Yükleniyor…", "正在加载…"),
+    ("Adres çubuğu", "地址栏"),
+    ("Ara", "搜索"),
+    ("Yeni metin belgesi", "新建文本文档"),
+    ("Komut adı yazın", "输入命令名称"),
+    ("Eşleşen komut yok", "没有匹配的命令"),
+    ("Komut paleti: bütün komutları adıyla ara ★", "命令面板：按名称查找任意命令 ★"),
 ];
