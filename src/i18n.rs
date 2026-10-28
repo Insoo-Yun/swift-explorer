@@ -494,6 +494,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "Current branch of the git repository this folder is in"),
     ("İçindekiler", "Contents"),
     ("Klasöre git", "Go to folder"),
+    ("Tümü", "All"),
 ];
 
 #[cfg(test)]

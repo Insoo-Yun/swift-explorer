@@ -335,4 +335,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "このフォルダーを含む git リポジトリの現在のブランチ"),
     ("İçindekiler", "内容"),
     ("Klasöre git", "フォルダーに移動"),
+    ("Tümü", "すべて"),
 ];

@@ -3434,6 +3434,9 @@ impl App {
             }
         }
 
+        if in_search {
+            self.extension_filter(ui);
+        }
         self.item_rects.clear();
         if self.view_level == 0 {
             self.details_view(ui, actions);
@@ -3468,6 +3471,39 @@ impl App {
             } else {
                 self.marquee = None;
             }
+        }
+    }
+
+    /// Arama sonuçlarının üstünde uzantı seçimi: "Tümü  .pdf 12  .txt 3"
+    fn extension_filter(&mut self, ui: &mut egui::Ui) {
+        let t = self.tab();
+        t.count_search_extensions();
+        let Some(s) = &t.search else { return };
+        if s.ext_counts.is_empty() {
+            return;
+        }
+        let cur = s.ext.clone();
+        let mut pick = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if ui.selectable_label(cur.is_none(), crate::i18n::t("Tümü")).clicked() {
+                pick = Some(None);
+            }
+            for (x, n) in &s.ext_counts {
+                let on = cur.as_deref() == Some(x.as_str());
+                if ui.selectable_label(on, format!(".{x}  {n}")).clicked() {
+                    pick = Some(if on { None } else { Some(x.clone()) });
+                }
+            }
+        });
+        ui.add_space(4.0);
+        if let Some(ext) = pick {
+            if let Some(s) = &mut t.search {
+                s.ext = ext;
+            }
+            t.selection.clear();
+            t.cursor = None;
+            t.view_dirty = true;
         }
     }
 

@@ -335,4 +335,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "此文件夹所在 git 仓库的当前分支"),
     ("İçindekiler", "内容"),
     ("Klasöre git", "转到文件夹"),
+    ("Tümü", "全部"),
 ];

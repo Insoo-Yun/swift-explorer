@@ -335,4 +335,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "Branche actuelle du dépôt git qui contient ce dossier"),
     ("İçindekiler", "Contenu"),
     ("Klasöre git", "Aller au dossier"),
+    ("Tümü", "Tous"),
 ];
