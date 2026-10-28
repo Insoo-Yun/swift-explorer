@@ -1005,6 +1005,18 @@ pub fn read_preview(path: &Path) -> PreviewData {
     PreviewData::Text(String::from_utf8_lossy(&buf).into_owned())
 }
 
+/// En çok geçen dosya uzantıları ve sayıları, çoktan aza; klasörler sayılmaz
+pub fn top_extensions(entries: &[Entry], n: usize) -> Vec<(String, usize)> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for e in entries.iter().filter(|e| !e.is_dir && !e.ext.is_empty()) {
+        *counts.entry(&e.ext).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> = counts.into_iter().map(|(k, c)| (k.to_string(), c)).collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v.truncate(n);
+    v
+}
+
 // ---------------------------------------------------------------- git
 
 /// Klasör bir git deposunun içindeyse etkin dalın adı; dal yoksa commit'in kısa hali
@@ -1202,5 +1214,15 @@ mod tests {
         let names: Vec<&str> = items.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["z klasör", "a2.txt", "a10.txt"]);
         fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn top_extensions_counts_files_only() {
+        let e = |name: &str, is_dir: bool| {
+            let path = PathBuf::from(name);
+            let ext = if is_dir { String::new() } else { path.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default() };
+            Entry { name: name.into(), name_lower: name.to_lowercase(), path, is_dir, size: 0, modified: None, created: None, hidden: false, ext, plain_dir: false }
+        };
+        let list = [e("a.pdf", false), e("b.PDF", false), e("c.txt", false), e("d.zip", false), e("klasor.pdf", true), e("README", false)];
+        assert_eq!(top_extensions(&list, 2), [("pdf".to_string(), 2), ("txt".to_string(), 1)]);
     }
 }
