@@ -36,6 +36,7 @@ Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with 
 - Same layout as Explorer: tabs in the title bar, address bar with breadcrumbs, command bar, navigation pane, Home and This PC pages.
 - Uses Windows' own icons, thumbnails and file type names.
 - Every Explorer shortcut works the same way. Press F1 for the full list.
+- Ctrl+Shift+P opens a command palette: type part of a command's name, like `hidden` or `large icons`, and press Enter.
 - Typing in the search box filters the current folder instantly. Press Enter to search all subfolders; `*` and `?` wildcards work.
 - Typing `cmd`, `powershell`, `pwsh` or `wt` in the address bar opens that terminal in the current folder, and `terminal` opens Windows Terminal. On Linux, `terminal` opens your default terminal, and a terminal's name (`konsole`, `kitty`…) opens that one.
 - Copy, cut, paste and drag and drop work in both directions with Explorer and the desktop.

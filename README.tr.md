@@ -36,6 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Explorer'la aynı düzen: başlık çubuğunda sekmeler, kırıntılı adres çubuğu, komut çubuğu, gezinti bölmesi, Giriş ve Bu bilgisayar sayfaları.
 - Windows'un kendi ikonları, küçük resimleri ve tür adları kullanılır.
 - Explorer'daki kısayolların hepsi aynı çalışır. F1 tam listeyi gösterir.
+- Ctrl+Shift+P komut paletini açar: `gizli` ya da `büyük simge` gibi komut adının bir kısmını yazıp Enter'a basın.
 - Arama kutusuna yazdıkça bulunduğunuz klasör filtrelenir. Enter'a basınca tüm alt klasörlerde arar; `*` ve `?` joker karakterleri çalışır.
 - Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır, `terminal` ise Windows Terminal'i açar. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
