@@ -986,6 +986,27 @@ pub fn read_preview(path: &Path) -> PreviewData {
     PreviewData::Text(String::from_utf8_lossy(&buf).into_owned())
 }
 
+// ---------------------------------------------------------------- git
+
+/// Klasör bir git deposunun içindeyse etkin dalın adı; dal yoksa commit'in kısa hali
+pub fn git_branch(dir: &Path) -> Option<String> {
+    let dot = dir.ancestors().map(|d| d.join(".git")).find(|g| g.exists())?;
+    // Alt modül ve worktree'lerde .git bir dosyadır: "gitdir: <yol>"
+    let git_dir = if dot.is_file() {
+        let s = fs::read_to_string(&dot).ok()?;
+        let p = PathBuf::from(s.strip_prefix("gitdir:")?.trim());
+        if p.is_absolute() { p } else { dot.parent()?.join(p) }
+    } else {
+        dot
+    };
+    let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    match head.strip_prefix("ref: ") {
+        Some(r) => Some(r.strip_prefix("refs/heads/").unwrap_or(r).to_string()),
+        None => Some(head.get(..7)?.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1129,6 +1150,24 @@ mod tests {
             perm.set_readonly(false);
             fs::set_permissions(f, perm).unwrap();
         }
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn git_branch_reads_head() {
+        let root = std::env::temp_dir().join(format!("swift-explorer-git-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("repo/.git")).unwrap();
+        fs::create_dir_all(root.join("repo/src/deep")).unwrap();
+        fs::write(root.join("repo/.git/HEAD"), "ref: refs/heads/feature/x\n").unwrap();
+        assert_eq!(git_branch(&root.join("repo/src/deep")).as_deref(), Some("feature/x"));
+        fs::write(root.join("repo/.git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+        assert_eq!(git_branch(&root.join("repo")).as_deref(), Some("0123456"));
+        // Worktree: .git dosyası başka bir klasörü gösterir
+        fs::create_dir_all(root.join("wt-meta")).unwrap();
+        fs::write(root.join("wt-meta/HEAD"), "ref: refs/heads/side\n").unwrap();
+        fs::create_dir_all(root.join("wt")).unwrap();
+        fs::write(root.join("wt/.git"), "gitdir: ../wt-meta\n").unwrap();
+        assert_eq!(git_branch(&root.join("wt")).as_deref(), Some("side"));
         fs::remove_dir_all(&root).unwrap();
     }
 }
