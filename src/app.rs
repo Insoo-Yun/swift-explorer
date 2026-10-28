@@ -271,8 +271,22 @@ enum Dialog {
     ConfirmDelete { paths: Vec<PathBuf> },
     Conflict { files: Vec<PathBuf>, dest: PathBuf, cut: bool, names: Vec<String> },
     Help,
+    Palette { query: String, sel: usize },
     #[cfg(not(windows))]
     Properties(Box<crate::properties::Properties>),
+}
+
+/// Komut paletindeki bir satırın yaptığı iş
+enum Cmd {
+    Do(Action),
+    Address,
+    Search,
+    Help,
+    Fullscreen,
+    Preview,
+    Hidden,
+    Extensions,
+    Theme(u8),
 }
 
 enum UndoOp {
@@ -1517,6 +1531,9 @@ impl App {
             }
             if shortcut(i, Modifiers::NONE, Key::F1) {
                 self.dialog = Dialog::Help;
+            }
+            if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::P) {
+                self.dialog = Dialog::Palette { query: String::new(), sel: 0 };
             }
             if shortcut(i, Modifiers::NONE, Key::F11) {
                 let fs = i.viewport().fullscreen.unwrap_or(false);
@@ -4094,7 +4111,178 @@ impl App {
         }
     }
 
-    fn dialogs(&mut self, ctx: &egui::Context) {
+    /// Komut paletinin satırları: ad, kısayol, iş. Yalnız şu an yapılabilecekler listelenir.
+    fn palette_items(&self) -> Vec<(String, String, Cmd)> {
+        let t = &self.tabs[self.active];
+        let (home, files, in_search, cur) = (t.is_home(), t.lists_files(), t.search.is_some(), t.path.clone());
+        let has_sel = !t.selected_entries().is_empty();
+        let mut out = Vec::new();
+        let mut add = |key: &str, keys: &str, cmd: Cmd| {
+            let (name, sc) = crate::palette::split_shortcut(crate::i18n::t(key));
+            out.push((name.to_string(), if sc.is_empty() { keys } else { sc }.to_string(), cmd));
+        };
+        add("Yeni sekme (Ctrl+T)", "", Cmd::Do(Action::NewTab(PathBuf::new())));
+        add("Sekmeyi kapat (Ctrl+W)", "", Cmd::Do(Action::CloseTab(self.active)));
+        add("Yeni pencere", "Ctrl+N", Cmd::Do(Action::NewWindow));
+        add("Geri (Alt+Sol ok)", "", Cmd::Do(Action::Back));
+        add("İleri (Alt+Sağ ok)", "", Cmd::Do(Action::Forward));
+        add("Üst klasör (Alt+Yukarı ok)", "", Cmd::Do(Action::Up));
+        add("Yenile (F5)", "", Cmd::Do(Action::Refresh));
+        add("Adres çubuğu", "Ctrl+L", Cmd::Address);
+        add("Ara", "Ctrl+F", Cmd::Search);
+        if files && !in_search {
+            add("Yeni klasör", "Ctrl+Shift+N", Cmd::Do(Action::NewFolder));
+            add("Yeni metin belgesi", "", Cmd::Do(Action::NewFile));
+            add("Yapıştır (Ctrl+V)", "", Cmd::Do(Action::Paste));
+        }
+        if has_sel {
+            add("Kes (Ctrl+X)", "", Cmd::Do(Action::Cut));
+            add("Kopyala (Ctrl+C)", "", Cmd::Do(Action::Copy));
+            add("Yeniden adlandır (F2)", "", Cmd::Do(Action::Rename));
+            add("Sil                               Del", "", Cmd::Do(Action::Delete { permanent: false }));
+            add("Kalıcı olarak sil", "Shift+Del", Cmd::Do(Action::Delete { permanent: true }));
+        }
+        if files {
+            add("Tümünü seç            Ctrl+A", "", Cmd::Do(Action::SelectAll));
+            add("Hiçbirini seçme        Esc", "", Cmd::Do(Action::SelectNone));
+            add("Seçimi tersine çevir", "", Cmd::Do(Action::InvertSelection));
+        }
+        if !self.undo.is_empty() {
+            add("Geri al                   Ctrl+Z", "", Cmd::Do(Action::Undo));
+        }
+        if !home {
+            let target = t.selected_paths().into_iter().next().unwrap_or(cur.clone());
+            add("Yolu kopyala (Ctrl+Shift+C)", "", Cmd::Do(Action::CopyPath));
+            add("Terminalde aç", "", Cmd::Do(Action::Terminal(cur.clone())));
+            add("Klasör boyutlarını hesapla", "", Cmd::Do(Action::CalcSize));
+            add("Hızlı erişime sabitle   Ctrl+D", "", Cmd::Do(Action::AddBookmark(cur)));
+            add("Özellikler              Alt+Enter", "", Cmd::Do(Action::Properties(target)));
+        }
+        add("Ayrıntılar bölmesi (Alt+P)", "", Cmd::Preview);
+        add("Gizli öğeler (Ctrl+H)", "", Cmd::Hidden);
+        add("Dosya adı uzantıları", "", Cmd::Extensions);
+        add("Tam ekran", "F11", Cmd::Fullscreen);
+        add("Klavye kısayolları      F1", "", Cmd::Help);
+
+        let sort = crate::i18n::t("Sırala");
+        for (k, n) in [(SortKey::Name, "Ad"), (SortKey::Modified, "Değiştirme tarihi"), (SortKey::Type, "Tür"), (SortKey::Size, "Boyut")] {
+            out.push((format!("{sort}: {}", crate::i18n::t(n)), String::new(), Cmd::Do(Action::Sort(k))));
+        }
+        let view = crate::i18n::t("Görünüm");
+        for (i, (_, n)) in VIEW_LEVELS.iter().enumerate() {
+            let sc = ["Ctrl+Shift+6", "Ctrl+Shift+4", "Ctrl+Shift+3", "Ctrl+Shift+2", "Ctrl+Shift+1"][i];
+            out.push((format!("{view}: {}", crate::i18n::t(n)), sc.to_string(), Cmd::Do(Action::SetView(i))));
+        }
+        let theme = crate::i18n::t("Tema");
+        let names = [crate::i18n::t("Sistem"), crate::i18n::t("Açık"), crate::i18n::t("Koyu")].into_iter().chain(scheme::SCHEMES.iter().map(|c| c.name));
+        for (v, n) in names.enumerate() {
+            out.push((format!("{theme}: {n}"), String::new(), Cmd::Theme(v as u8)));
+        }
+        out
+    }
+
+    fn run_cmd(&mut self, cmd: Cmd, actions: &mut Vec<Action>) {
+        match cmd {
+            Cmd::Do(a) => actions.push(a),
+            Cmd::Address => {
+                self.address_edit = Some(self.tabs[self.active].path.to_string_lossy().into_owned());
+                self.address_focus = true;
+            }
+            Cmd::Search => self.focus_search = true,
+            Cmd::Help => self.dialog = Dialog::Help,
+            Cmd::Fullscreen => {
+                let fs = self.ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+            }
+            Cmd::Preview => self.show_preview = !self.show_preview,
+            Cmd::Hidden => {
+                self.show_hidden = !self.show_hidden;
+                self.subdirs.clear();
+                self.mark_views_dirty();
+            }
+            Cmd::Extensions => self.show_ext = !self.show_ext,
+            Cmd::Theme(v) => self.set_theme(v),
+        }
+    }
+
+    fn palette(&mut self, ctx: &egui::Context, query: &mut String, sel: &mut usize, actions: &mut Vec<Action>) -> bool {
+        let mut items = self.palette_items();
+        let mut found: Vec<(i32, usize)> = items.iter().enumerate().filter_map(|(i, (name, _, _))| Some((crate::palette::score(query, name)?, i))).collect();
+        found.sort_by_key(|&(s, i)| (std::cmp::Reverse(s), i));
+
+        // Metin kutusundan önce alınır, yoksa imleci oynatırlar
+        let (up, down, enter, esc) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+            )
+        });
+        let n = found.len();
+        if n > 0 && down {
+            *sel = (*sel + 1) % n;
+        }
+        if n > 0 && up {
+            *sel = (*sel + n - 1) % n;
+        }
+        *sel = (*sel).min(n.saturating_sub(1));
+        let mut run = if enter { found.get(*sel).map(|&(_, i)| i) } else { None };
+
+        let p = pal(ctx.style().visuals.dark_mode);
+        let accent = self.accent;
+        let width = 560.0_f32.min(ctx.screen_rect().width() - 32.0);
+        let area = egui::Area::new(egui::Id::new("palette")).anchor(Align2::CENTER_TOP, egui::vec2(0.0, TITLE_H + 8.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(6).show(ui, |ui| {
+                ui.set_width(width);
+                let edit = ui.add(egui::TextEdit::singleline(query).hint_text(crate::i18n::t("Komut adı yazın")).desired_width(f32::INFINITY).margin(egui::vec2(8.0, 6.0)));
+                edit.request_focus();
+                if edit.changed() {
+                    *sel = 0;
+                }
+                ui.add_space(4.0);
+                if found.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(crate::i18n::t("Eşleşen komut yok")).weak());
+                    ui.add_space(4.0);
+                    return;
+                }
+                egui::ScrollArea::vertical().max_height(28.0 * 12.0).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (row, &(_, i)) in found.iter().enumerate() {
+                        let (name, keys, _) = &items[i];
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::click());
+                        let painter = ui.painter();
+                        if row == *sel {
+                            painter.rect_filled(rect, 4.0, p.sel);
+                            painter.rect_filled(Rect::from_min_size(Pos2::new(rect.left(), rect.center().y - 8.0), egui::vec2(3.0, 16.0)), 1.5, accent);
+                            if up || down {
+                                resp.scroll_to_me(None);
+                            }
+                        } else if resp.hovered() {
+                            painter.rect_filled(rect, 4.0, p.hover);
+                        }
+                        painter.text(rect.left_center() + egui::vec2(12.0, 0.0), Align2::LEFT_CENTER, name, egui::FontId::proportional(14.0), p.text);
+                        if !keys.is_empty() {
+                            painter.text(rect.right_center() - egui::vec2(10.0, 0.0), Align2::RIGHT_CENTER, keys, egui::FontId::proportional(12.0), p.weak);
+                        }
+                        if resp.clicked() {
+                            run = Some(i);
+                        }
+                    }
+                });
+            });
+        });
+        let outside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|pos| !area.response.rect.contains(pos)));
+        if let Some(i) = run {
+            let cmd = items.swap_remove(i).2;
+            self.run_cmd(cmd, actions);
+            return false;
+        }
+        !(esc || outside)
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let mut dialog = std::mem::replace(&mut self.dialog, Dialog::None);
         let mut keep = true;
         match &mut dialog {
@@ -4194,6 +4382,7 @@ impl App {
                     self.toast(e, true);
                 }
             }
+            Dialog::Palette { query, sel } => keep = self.palette(ctx, query, sel, actions),
             Dialog::Help => {
                 let resp = egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
                     ui.set_width(560.0);
@@ -4261,6 +4450,7 @@ const HELP: &[(&str, &str)] = &[
     ("Ctrl+T / Ctrl+W", "Yeni sekme / sekmeyi kapat"),
     ("Ctrl+Tab / Ctrl+1…9", "Sekmeler arası geçiş"),
     ("Ctrl+N", "Yeni pencere"),
+    ("Ctrl+Shift+P", "Komut paleti: bütün komutları adıyla ara ★"),
     ("Shift+sağ tık / Shift+F10", "Windows'un tam sağ tık menüsü"),
     ("Orta tık", "Klasörü yeni sekmede aç / sekmeyi kapat ★"),
     ("Sürükle-bırak", "Aynı sürücü: taşı, farklı sürücü: kopyala (Ctrl: kopyala, Shift: taşı)"),
@@ -4486,7 +4676,7 @@ impl eframe::App for App {
             }
         });
 
-        self.dialogs(ctx);
+        self.dialogs(ctx, &mut actions);
         self.overlays(ctx);
         self.drag_overlay(ctx);
 
