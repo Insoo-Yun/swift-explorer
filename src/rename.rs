@@ -119,15 +119,13 @@ pub fn apply(pairs: &[(PathBuf, PathBuf)]) -> Result<(), String> {
         .enumerate()
         .map(|(i, (a, b))| (a, b, a.with_file_name(format!(".swift-rename-{}-{i}", std::process::id()))))
         .collect();
-    let mut parked = 0;
-    for (a, _, t) in &pairs {
+    for (i, (a, _, t)) in pairs.iter().enumerate() {
         if let Err(e) = std::fs::rename(a, t) {
-            for (a, _, t) in &pairs[..parked] {
+            for (a, _, t) in &pairs[..i] {
                 let _ = std::fs::rename(t, a);
             }
             return Err(e.to_string());
         }
-        parked += 1;
     }
     for (i, (_, b, t)) in pairs.iter().enumerate() {
         if let Err(e) = std::fs::rename(t, b) {
