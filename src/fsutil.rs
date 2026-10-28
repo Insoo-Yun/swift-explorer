@@ -962,6 +962,25 @@ pub enum PreviewData {
     Text(String),
     Binary,
     Error(String),
+    /// Klasörün ilk öğeleri ve toplam öğe sayısı
+    Folder(Vec<Entry>, usize),
+}
+
+/// Klasör önizlemesi: önce klasörler, ada göre; en fazla `limit` öğe
+pub fn read_folder_preview(path: &Path, show_hidden: bool, limit: usize) -> PreviewData {
+    let rd = match fs::read_dir(path) {
+        Ok(rd) => rd,
+        Err(e) => return PreviewData::Error(e.to_string()),
+    };
+    let mut items: Vec<Entry> = rd
+        .flatten()
+        .filter_map(|d| Some(Entry::from_metadata(d.path(), &d.metadata().ok()?)))
+        .filter(|e| show_hidden || !e.hidden)
+        .collect();
+    let total = items.len();
+    items.sort_by(|a, b| compare(a, b, SortKey::Name, true));
+    items.truncate(limit);
+    PreviewData::Folder(items, total)
 }
 
 pub fn read_preview(path: &Path) -> PreviewData {
@@ -1168,6 +1187,20 @@ mod tests {
         fs::create_dir_all(root.join("wt")).unwrap();
         fs::write(root.join("wt/.git"), "gitdir: ../wt-meta\n").unwrap();
         assert_eq!(git_branch(&root.join("wt")).as_deref(), Some("side"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn folder_preview_lists_folders_first_and_counts_all() {
+        let root = std::env::temp_dir().join(format!("swift-explorer-folder-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("z klasör")).unwrap();
+        for n in ["b.txt", "a10.txt", "a2.txt"] {
+            fs::write(root.join(n), b"x").unwrap();
+        }
+        let PreviewData::Folder(items, total) = read_folder_preview(&root, true, 3) else { panic!() };
+        assert_eq!(total, 4);
+        let names: Vec<&str> = items.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["z klasör", "a2.txt", "a10.txt"]);
         fs::remove_dir_all(&root).unwrap();
     }
 }
