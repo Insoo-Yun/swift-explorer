@@ -7,6 +7,7 @@ mod fsutil;
 mod i18n;
 mod images;
 mod palette;
+mod rename;
 #[cfg(not(windows))]
 mod properties;
 mod scheme;
