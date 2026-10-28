@@ -358,4 +358,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("{} öğe yeniden adlandırıldı", "已重命名 {} 个项目"),
     ("F2 (birden çok öğe seçiliyken)", "F2（选中多个项目时）"),
     ("Toplu yeniden adlandır: bul ve değiştir, numara, tarih ★", "批量重命名：查找替换、编号、日期 ★"),
+    ("Buraya çıkart", "解压到此处"),
+    ("Zip dosyasına sıkıştır", "压缩为 ZIP 文件"),
+    ("Çıkartılıyor: {}", "正在解压：{}"),
+    ("Sıkıştırılıyor: {}", "正在压缩：{}"),
 ];

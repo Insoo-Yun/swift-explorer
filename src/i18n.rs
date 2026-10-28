@@ -517,6 +517,10 @@ static TABLE: &[(&str, &str)] = &[
     ("{} öğe yeniden adlandırıldı", "{} items renamed"),
     ("F2 (birden çok öğe seçiliyken)", "F2 (with several items selected)"),
     ("Toplu yeniden adlandır: bul ve değiştir, numara, tarih ★", "Batch rename: find and replace, numbers, dates ★"),
+    ("Buraya çıkart", "Extract here"),
+    ("Zip dosyasına sıkıştır", "Compress to ZIP file"),
+    ("Çıkartılıyor: {}", "Extracting: {}"),
+    ("Sıkıştırılıyor: {}", "Compressing: {}"),
 ];
 
 #[cfg(test)]

@@ -263,6 +263,8 @@ enum Action {
     Sort(SortKey),
     SetView(usize),
     DropPaths { paths: Vec<PathBuf>, target: PathBuf, ctrl: bool, shift: bool },
+    Extract(PathBuf),
+    Compress,
     Undo,
 }
 
@@ -1876,6 +1878,17 @@ impl App {
                     self.renaming = Some(Renaming { path: e.path.clone(), text: e.name.clone(), first: true });
                 }
             }
+            Action::Extract(p) => {
+                let job = crate::archive::spawn_extract(p, ctx.clone());
+                self.push_job(job, true);
+            }
+            Action::Compress => {
+                let paths = self.tab().selected_paths();
+                if !paths.is_empty() && !busy_here {
+                    let job = crate::archive::spawn_compress(paths, ctx.clone());
+                    self.push_job(job, true);
+                }
+            }
             Action::NewFolder => self.create_new(true),
             Action::NewFile => self.create_new(false),
             Action::SelectAll => {
@@ -3211,6 +3224,10 @@ fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, acti
             actions.push(Action::OpenWith(path.to_path_buf()));
             ui.close_menu();
         }
+        if crate::archive::is_zip(path) && mi(ui, "📤", crate::i18n::t("Buraya çıkart")) {
+            actions.push(Action::Extract(path.to_path_buf()));
+            ui.close_menu();
+        }
     }
     if in_search {
         if let Some(parent) = path.parent() {
@@ -3239,6 +3256,10 @@ fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, acti
     }
     if mi(ui, "🗑", crate::i18n::t("Sil                               Del")) {
         actions.push(Action::Delete { permanent: false });
+        ui.close_menu();
+    }
+    if !in_search && mi(ui, "📦", crate::i18n::t("Zip dosyasına sıkıştır")) {
+        actions.push(Action::Compress);
         ui.close_menu();
     }
     ui.separator();
@@ -4229,6 +4250,14 @@ impl App {
             if t.selected_entries().len() > 1 {
                 add("Toplu yeniden adlandır", "F2", Cmd::Do(Action::Rename));
             }
+            if !in_search {
+                add("Zip dosyasına sıkıştır", "", Cmd::Do(Action::Compress));
+            }
+            if let [e] = t.selected_entries()[..] {
+                if crate::archive::is_zip(&e.path) {
+                    add("Buraya çıkart", "", Cmd::Do(Action::Extract(e.path.clone())));
+                }
+            }
             add("Sil                               Del", "", Cmd::Do(Action::Delete { permanent: false }));
             add("Kalıcı olarak sil", "Shift+Del", Cmd::Do(Action::Delete { permanent: true }));
         }
@@ -4796,6 +4825,7 @@ impl eframe::App for App {
                     JobKind::Transfer if j.cut => self.undo.push(UndoOp::Moved(pairs)),
                     JobKind::Transfer => self.undo.push(UndoOp::Copied(pairs.into_iter().map(|(_, d)| d).collect())),
                     JobKind::Delete if !j.permanent => self.undo.push(UndoOp::Trashed(pairs.into_iter().map(|(s, _)| s).collect())),
+                    JobKind::Archive => self.undo.extend(pairs.into_iter().map(|(_, d)| UndoOp::Created(d))),
                     _ => {}
                 }
             }

@@ -358,4 +358,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("{} öğe yeniden adlandırıldı", "Переименовано элементов: {}"),
     ("F2 (birden çok öğe seçiliyken)", "F2 (при выделении нескольких элементов)"),
     ("Toplu yeniden adlandır: bul ve değiştir, numara, tarih ★", "Пакетное переименование: поиск и замена, номера, даты ★"),
+    ("Buraya çıkart", "Извлечь сюда"),
+    ("Zip dosyasına sıkıştır", "Сжать в ZIP-файл"),
+    ("Çıkartılıyor: {}", "Извлечение: {}"),
+    ("Sıkıştırılıyor: {}", "Сжатие: {}"),
 ];

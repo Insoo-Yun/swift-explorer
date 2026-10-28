@@ -358,4 +358,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("{} öğe yeniden adlandırıldı", "{} 個の項目の名前を変更しました"),
     ("F2 (birden çok öğe seçiliyken)", "F2 (複数の項目を選択しているとき)"),
     ("Toplu yeniden adlandır: bul ve değiştir, numara, tarih ★", "一括で名前を変更: 検索と置換、番号、日付 ★"),
+    ("Buraya çıkart", "ここに展開"),
+    ("Zip dosyasına sıkıştır", "ZIP ファイルに圧縮"),
+    ("Çıkartılıyor: {}", "展開中: {}"),
+    ("Sıkıştırılıyor: {}", "圧縮中: {}"),
 ];
