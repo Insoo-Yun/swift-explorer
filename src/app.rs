@@ -1315,6 +1315,12 @@ impl App {
         self.toasts.push((msg.into(), Instant::now(), error));
     }
 
+    fn set_theme(&mut self, theme: u8) {
+        self.theme = theme;
+        self.accent = theme_accent(theme);
+        apply_theme(&self.ctx, self.accent, theme);
+    }
+
     fn mark_views_dirty(&mut self) {
         for t in &mut self.tabs {
             t.view_dirty = true;
@@ -2644,9 +2650,7 @@ impl App {
                             ui.end_row();
                         }
                         if ui.selectable_label(self.theme == v, n).clicked() && self.theme != v {
-                            self.theme = v;
-                            self.accent = theme_accent(v);
-                            apply_theme(ui.ctx(), self.accent, v);
+                            self.set_theme(v);
                         }
                     }
                 });
