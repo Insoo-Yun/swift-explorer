@@ -272,6 +272,7 @@ enum Dialog {
     Conflict { files: Vec<PathBuf>, dest: PathBuf, cut: bool, names: Vec<String> },
     Help,
     Palette { query: String, sel: usize },
+    BatchRename { items: Vec<crate::rename::Item>, rule: crate::rename::Rule },
     #[cfg(not(windows))]
     Properties(Box<crate::properties::Properties>),
 }
@@ -295,6 +296,8 @@ enum UndoOp {
     Moved(Vec<(PathBuf, PathBuf)>),
     Copied(Vec<PathBuf>),
     Trashed(Vec<PathBuf>),
+    /// Toplu yeniden adlandırma: (eski, yeni)
+    Renamed(Vec<(PathBuf, PathBuf)>),
 }
 
 struct Renaming {
@@ -1454,6 +1457,16 @@ impl App {
             UndoOp::Trashed(paths) => {
                 self.push_job(fsutil::spawn_restore(paths, ctx), false);
             }
+            UndoOp::Renamed(pairs) => {
+                let back: Vec<(PathBuf, PathBuf)> = pairs.into_iter().map(|(from, to)| (to, from)).collect();
+                match crate::rename::apply(&back) {
+                    Ok(()) => {
+                        self.toast(crate::i18n::t("Yeniden adlandırma geri alındı"), false);
+                        self.reload_active(None);
+                    }
+                    Err(e) => self.toast(crate::i18n::tf("Geri alınamadı: {}", &[&e]), true),
+                }
+            }
         }
     }
 
@@ -1855,7 +1868,11 @@ impl App {
                 }
             }
             Action::Rename => {
-                if let Some(e) = self.tab().selected_entries().first() {
+                let sel = self.tab().selected_entries();
+                if sel.len() > 1 {
+                    let items = sel.iter().map(|e| crate::rename::Item { path: e.path.clone(), is_dir: e.is_dir, modified: e.modified }).collect();
+                    self.dialog = Dialog::BatchRename { items, rule: crate::rename::Rule { start: 1, digits: 1, ..Default::default() } };
+                } else if let Some(e) = sel.first() {
                     self.renaming = Some(Renaming { path: e.path.clone(), text: e.name.clone(), first: true });
                 }
             }
@@ -4209,6 +4226,9 @@ impl App {
             add("Kes (Ctrl+X)", "", Cmd::Do(Action::Cut));
             add("Kopyala (Ctrl+C)", "", Cmd::Do(Action::Copy));
             add("Yeniden adlandır (F2)", "", Cmd::Do(Action::Rename));
+            if t.selected_entries().len() > 1 {
+                add("Toplu yeniden adlandır", "F2", Cmd::Do(Action::Rename));
+            }
             add("Sil                               Del", "", Cmd::Do(Action::Delete { permanent: false }));
             add("Kalıcı olarak sil", "Shift+Del", Cmd::Do(Action::Delete { permanent: true }));
         }
@@ -4362,6 +4382,106 @@ impl App {
         !(esc || outside)
     }
 
+    fn batch_rename(&mut self, ctx: &egui::Context, items: &[crate::rename::Item], rule: &mut crate::rename::Rule) -> bool {
+        use crate::rename::{Case, Problem};
+        let plan = crate::rename::plan(rule, items);
+        let changed = items.iter().zip(&plan).filter(|(it, (n, _))| path_label(&it.path) != *n).count();
+        let problems = plan.iter().filter(|(_, p)| p.is_some()).count();
+        let mut apply = false;
+        let resp = egui::Modal::new(egui::Id::new("batch_rename")).show(ctx, |ui| {
+            ui.set_width(640.0);
+            ui.heading(crate::i18n::t("Toplu yeniden adlandır"));
+            ui.label(RichText::new(crate::i18n::tf("{} öğe seçildi", &[&items.len()])).weak());
+            ui.add_space(8.0);
+            egui::Grid::new("rename_rule").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label(crate::i18n::t("Bul"));
+                ui.add(egui::TextEdit::singleline(&mut rule.find).desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label(crate::i18n::t("Şununla değiştir"));
+                ui.add(egui::TextEdit::singleline(&mut rule.replace).desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label(crate::i18n::t("Ad şablonu"));
+                ui.add(egui::TextEdit::singleline(&mut rule.template).hint_text("{name} {n}").desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label("");
+                ui.label(RichText::new(crate::i18n::t("{name}: eski ad · {n}: numara · {date}: değiştirme tarihi")).weak().small());
+                ui.end_row();
+                ui.label(crate::i18n::t("Numara"));
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::t("başlangıç"));
+                    ui.add(egui::DragValue::new(&mut rule.start).range(0..=999_999));
+                    ui.add_space(12.0);
+                    ui.label(crate::i18n::t("basamak"));
+                    ui.add(egui::DragValue::new(&mut rule.digits).range(1..=8));
+                });
+                ui.end_row();
+                ui.label(crate::i18n::t("Harfler"));
+                ui.horizontal_wrapped(|ui| {
+                    for (c, n) in [(Case::Keep, "Olduğu gibi"), (Case::Lower, "küçük harf"), (Case::Upper, "BÜYÜK HARF"), (Case::Title, "Baş Harfler Büyük")] {
+                        ui.radio_value(&mut rule.case, c, crate::i18n::t(n));
+                    }
+                });
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            let err = if ui.visuals().dark_mode { Color32::from_rgb(255, 153, 164) } else { Color32::from_rgb(196, 43, 28) };
+            egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(6.0).inner_margin(8).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::Grid::new("rename_preview").num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
+                        for (it, (n, p)) in items.iter().zip(&plan) {
+                            let old = path_label(&it.path);
+                            ui.label(RichText::new(&old).weak());
+                            ui.label(RichText::new("→").weak());
+                            let why = match p {
+                                Some(Problem::Invalid) => crate::i18n::t("geçersiz ad"),
+                                Some(Problem::Duplicate) => crate::i18n::t("aynı ad iki kez"),
+                                Some(Problem::Exists) => crate::i18n::t("bu adda bir öğe zaten var"),
+                                None => "",
+                            };
+                            if p.is_some() {
+                                ui.label(RichText::new(format!("{n}   ({why})")).color(err));
+                            } else if old == *n {
+                                ui.label(RichText::new(n).weak());
+                            } else {
+                                ui.label(n);
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if problems > 0 {
+                    ui.label(RichText::new(crate::i18n::tf("{} adda sorun var", &[&problems])).color(err));
+                } else {
+                    ui.label(RichText::new(crate::i18n::tf("{} öğenin adı değişecek", &[&changed])).weak());
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let ok = problems == 0 && changed > 0;
+                    let b = ui.add_enabled(ok, egui::Button::new(RichText::new(crate::i18n::t("Yeniden adlandır")).color(Color32::WHITE)).fill(self.accent).min_size(egui::vec2(140.0, 30.0)));
+                    apply = b.clicked();
+                    ui.button(crate::i18n::t("Vazgeç")).clicked()
+                })
+                .inner
+            })
+            .inner
+        });
+        if apply {
+            let pairs: Vec<(PathBuf, PathBuf)> = items.iter().zip(plan).map(|(it, (n, _))| (it.path.clone(), it.path.with_file_name(n))).filter(|(a, b)| a != b).collect();
+            match crate::rename::apply(&pairs) {
+                Ok(()) => {
+                    self.toast(crate::i18n::tf("{} öğe yeniden adlandırıldı", &[&pairs.len()]), false);
+                    self.undo.push(UndoOp::Renamed(pairs));
+                    self.reload_active(None);
+                }
+                Err(e) => self.toast(crate::i18n::tf("Yeniden adlandırılamadı: {}", &[&e]), true),
+            }
+            return false;
+        }
+        !(resp.inner || resp.should_close())
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let mut dialog = std::mem::replace(&mut self.dialog, Dialog::None);
         let mut keep = true;
@@ -4463,6 +4583,7 @@ impl App {
                 }
             }
             Dialog::Palette { query, sel } => keep = self.palette(ctx, query, sel, actions),
+            Dialog::BatchRename { items, rule } => keep = self.batch_rename(ctx, items, rule),
             Dialog::Help => {
                 let resp = egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
                     ui.set_width(560.0);
@@ -4518,6 +4639,7 @@ const HELP: &[(&str, &str)] = &[
     ("Ctrl+C / Ctrl+X / Ctrl+V", "Kopyala / Kes / Yapıştır (Explorer ile karşılıklı)"),
     ("Ctrl+Z", "Geri al: yeniden adlandırma, taşıma, kopyalama, silme"),
     ("F2", "Yeniden adlandır (yerinde)"),
+    ("F2 (birden çok öğe seçiliyken)", "Toplu yeniden adlandır: bul ve değiştir, numara, tarih ★"),
     ("Del / Shift+Del", "Geri dönüşüm kutusuna / kalıcı sil"),
     ("Ctrl+Shift+N", "Yeni klasör"),
     ("Ctrl+A", "Tümünü seç"),
