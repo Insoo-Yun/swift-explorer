@@ -362,4 +362,9 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Zip dosyasına sıkıştır", "Сжать в ZIP-файл"),
     ("Çıkartılıyor: {}", "Извлечение: {}"),
     ("Sıkıştırılıyor: {}", "Сжатие: {}"),
+    ("Çift bölme (Ctrl+Shift+S)", "Две панели (Ctrl+Shift+S)"),
+    ("Öbür bölmeye kopyala", "Копировать в другую панель"),
+    ("Öbür bölmeye taşı", "Переместить в другую панель"),
+    ("Çift bölme: iki klasör yan yana ★", "Две панели: две папки рядом ★"),
+    ("Çift bölmede öbür bölmeye geç ★", "Перейти в другую панель ★"),
 ];

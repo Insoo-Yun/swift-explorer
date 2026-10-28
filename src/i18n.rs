@@ -521,6 +521,11 @@ static TABLE: &[(&str, &str)] = &[
     ("Zip dosyasına sıkıştır", "Compress to ZIP file"),
     ("Çıkartılıyor: {}", "Extracting: {}"),
     ("Sıkıştırılıyor: {}", "Compressing: {}"),
+    ("Çift bölme (Ctrl+Shift+S)", "Split view (Ctrl+Shift+S)"),
+    ("Öbür bölmeye kopyala", "Copy to the other pane"),
+    ("Öbür bölmeye taşı", "Move to the other pane"),
+    ("Çift bölme: iki klasör yan yana ★", "Split view: two folders side by side ★"),
+    ("Çift bölmede öbür bölmeye geç ★", "Switch to the other pane in split view ★"),
 ];
 
 #[cfg(test)]

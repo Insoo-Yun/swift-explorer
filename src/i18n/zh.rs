@@ -362,4 +362,9 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Zip dosyasına sıkıştır", "压缩为 ZIP 文件"),
     ("Çıkartılıyor: {}", "正在解压：{}"),
     ("Sıkıştırılıyor: {}", "正在压缩：{}"),
+    ("Çift bölme (Ctrl+Shift+S)", "拆分视图 (Ctrl+Shift+S)"),
+    ("Öbür bölmeye kopyala", "复制到另一侧窗格"),
+    ("Öbür bölmeye taşı", "移动到另一侧窗格"),
+    ("Çift bölme: iki klasör yan yana ★", "拆分视图：两个文件夹并排显示 ★"),
+    ("Çift bölmede öbür bölmeye geç ★", "在拆分视图中切换到另一侧窗格 ★"),
 ];

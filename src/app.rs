@@ -265,6 +265,9 @@ enum Action {
     DropPaths { paths: Vec<PathBuf>, target: PathBuf, ctrl: bool, shift: bool },
     Extract(PathBuf),
     Compress,
+    ToggleSplit,
+    /// Seçili öğeleri öbür bölmenin klasörüne kopyala ya da taşı
+    ToOtherPane { cut: bool },
     Undo,
 }
 
@@ -372,6 +375,10 @@ pub struct App {
     hwnd: Option<isize>,
     renaming: Option<Renaming>,
     undo: Vec<UndoOp>,
+    /// Yan yana iki bölme: soldaki ve sağdaki sekmenin sırası
+    split: Option<[usize; 2]>,
+    /// Klavyenin ve komutların gittiği bölme (0 sol, 1 sağ)
+    focus: usize,
     /// Etkin klasör ve içinde bulunduğu git deposunun dalı
     git_branch: (PathBuf, Option<String>),
     /// Alt klasör listeleri (gezinti ağacı, adres çubuğu). Arka planda okunur; paylaşımlı
@@ -1161,6 +1168,8 @@ impl App {
             hwnd: None,
             renaming: None,
             git_branch: (PathBuf::new(), None),
+            split: None,
+            focus: 0,
             undo: vec![],
             subdirs: HashMap::new(),
             subdirs_pending: Default::default(),
@@ -1554,6 +1563,15 @@ impl App {
             if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::P) {
                 self.dialog = Dialog::Palette { query: String::new(), sel: 0 };
             }
+            if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::S) {
+                actions.push(Action::ToggleSplit);
+            }
+            if let Some(p) = self.split {
+                if shortcut(i, Modifiers::NONE, Key::F6) {
+                    self.focus = 1 - self.focus;
+                    self.active = p[self.focus];
+                }
+            }
             if shortcut(i, Modifiers::NONE, Key::F11) {
                 let fs = i.viewport().fullscreen.unwrap_or(false);
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
@@ -1804,6 +1822,13 @@ impl App {
                 if self.tabs.len() > 1 {
                     self.tabs[i].cancel_search();
                     self.tabs.remove(i);
+                    if let Some(p) = &mut self.split {
+                        if p.contains(&i) {
+                            self.split = None;
+                        } else {
+                            p.iter_mut().filter(|x| **x > i).for_each(|x| *x -= 1);
+                        }
+                    }
                     if self.active >= self.tabs.len() || self.active > i {
                         self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
                     }
@@ -1888,6 +1913,23 @@ impl App {
                 if !paths.is_empty() && !busy_here {
                     let job = crate::archive::spawn_compress(paths, ctx.clone());
                     self.push_job(job, true);
+                }
+            }
+            Action::ToggleSplit => {
+                if self.split.take().is_none() {
+                    let p = self.tabs[self.active].path.clone();
+                    self.tabs.push(Tab::new(p, &ctx));
+                    self.split = Some([self.active, self.tabs.len() - 1]);
+                    self.focus = 0;
+                }
+            }
+            Action::ToOtherPane { cut } => {
+                if let Some(p) = self.split {
+                    let dest = self.tabs[p[1 - self.focus]].path.clone();
+                    let files = self.tab().selected_paths();
+                    if !files.is_empty() && !crate::tab::is_virtual(&dest) {
+                        self.start_transfer(files, dest, cut);
+                    }
                 }
             }
             Action::NewFolder => self.create_new(true),
@@ -2654,6 +2696,10 @@ impl App {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_preview, crate::i18n::t("Ayrıntılar bölmesi (Alt+P)"));
+                let mut split = self.split.is_some();
+                if ui.checkbox(&mut split, crate::i18n::t("Çift bölme (Ctrl+Shift+S)")).changed() {
+                    actions.push(Action::ToggleSplit);
+                }
                 if ui.checkbox(&mut self.show_hidden, crate::i18n::t("Gizli öğeler (Ctrl+H)")).changed() {
                     self.subdirs.clear();
                     self.mark_views_dirty();
@@ -3513,6 +3559,58 @@ impl App {
         }
     }
 
+    fn pane(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let t = &self.tabs[self.active];
+        if t.lists_files() {
+            self.file_area(ui, actions);
+        } else if t.is_pc() {
+            self.pc_page(ui, actions);
+        } else {
+            self.home_page(ui, actions);
+        }
+    }
+
+    /// Sekme şeridinden ya da kısayolla seçilen sekme odaktaki bölmeye geçer
+    fn sync_split(&mut self) {
+        let Some(p) = &mut self.split else { return };
+        if p[self.focus] != self.active {
+            if p[1 - self.focus] == self.active {
+                self.focus = 1 - self.focus;
+            } else {
+                p[self.focus] = self.active;
+            }
+        }
+    }
+
+    fn split_panes(&mut self, ui: &mut egui::Ui, panes: [usize; 2], actions: &mut Vec<Action>) {
+        let full = ui.max_rect();
+        let mid = full.center().x;
+        let rects = [full.with_max_x(mid - 4.0), full.with_min_x(mid + 4.0)];
+        let p = pal_of(ui);
+        ui.painter().vline(mid, full.y_range(), Stroke::new(1.0, p.line));
+        // Bir bölmeye tıklayınca odak oraya geçer; menü ve pencereler bu katmanda değil
+        let press = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+        if let Some(pos) = press.filter(|&pos| ui.ctx().layer_id_at(pos) == Some(ui.layer_id())) {
+            if let Some(side) = rects.iter().position(|r| r.contains(pos)) {
+                self.focus = side;
+            }
+        }
+        // Odaktaki bölme en son çizilir: ızgara sütunu ve kaydırma gibi paylaşılan durum onun olur
+        for side in [1 - self.focus, self.focus] {
+            self.active = panes[side];
+            let renaming = if side == self.focus { None } else { self.renaming.take() };
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rects[side]).id_salt(("pane", side)));
+            child.set_clip_rect(rects[side].intersect(ui.clip_rect()));
+            self.pane(&mut child, actions);
+            if renaming.is_some() {
+                self.renaming = renaming;
+            }
+        }
+        self.active = panes[self.focus];
+        let r = rects[self.focus];
+        ui.painter().hline(r.x_range(), r.top() + 1.0, Stroke::new(2.0, self.accent));
+    }
+
     /// Arama sonuçlarının üstünde uzantı seçimi: "Tümü  .pdf 12  .txt 3"
     fn extension_filter(&mut self, ui: &mut egui::Ui) {
         let t = self.tab();
@@ -4279,6 +4377,11 @@ impl App {
             add("Özellikler              Alt+Enter", "", Cmd::Do(Action::Properties(target)));
         }
         add("Ayrıntılar bölmesi (Alt+P)", "", Cmd::Preview);
+        add("Çift bölme (Ctrl+Shift+S)", "", Cmd::Do(Action::ToggleSplit));
+        if self.split.is_some() && has_sel && files && !in_search {
+            add("Öbür bölmeye kopyala", "", Cmd::Do(Action::ToOtherPane { cut: false }));
+            add("Öbür bölmeye taşı", "", Cmd::Do(Action::ToOtherPane { cut: true }));
+        }
         add("Gizli öğeler (Ctrl+H)", "", Cmd::Hidden);
         add("Dosya adı uzantıları", "", Cmd::Extensions);
         add("Tam ekran", "F11", Cmd::Fullscreen);
@@ -4683,6 +4786,8 @@ const HELP: &[(&str, &str)] = &[
     ("Ctrl+Tab / Ctrl+1…9", "Sekmeler arası geçiş"),
     ("Ctrl+N", "Yeni pencere"),
     ("Ctrl+Shift+P", "Komut paleti: bütün komutları adıyla ara ★"),
+    ("Ctrl+Shift+S", "Çift bölme: iki klasör yan yana ★"),
+    ("F6", "Çift bölmede öbür bölmeye geç ★"),
     ("Shift+sağ tık / Shift+F10", "Windows'un tam sağ tık menüsü"),
     ("Orta tık", "Klasörü yeni sekmede aç / sekmeyi kapat ★"),
     ("Sürükle-bırak", "Aynı sürücü: taşı, farklı sürücü: kopyala (Ctrl: kopyala, Shift: taşı)"),
@@ -4899,13 +5004,11 @@ impl eframe::App for App {
             });
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(pl.content).inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 0 })).show(ctx, |ui| {
-            let t = &self.tabs[self.active];
-            if t.lists_files() {
-                self.file_area(ui, &mut actions);
-            } else if t.is_pc() {
-                self.pc_page(ui, &mut actions);
-            } else {
-                self.home_page(ui, &mut actions);
+            // Sekme şeridinde az önce seçilen sekme odaktaki bölmeye geçsin
+            self.sync_split();
+            match self.split {
+                Some(panes) => self.split_panes(ui, panes, &mut actions),
+                None => self.pane(ui, &mut actions),
             }
         });
 

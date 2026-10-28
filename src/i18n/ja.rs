@@ -362,4 +362,9 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Zip dosyasına sıkıştır", "ZIP ファイルに圧縮"),
     ("Çıkartılıyor: {}", "展開中: {}"),
     ("Sıkıştırılıyor: {}", "圧縮中: {}"),
+    ("Çift bölme (Ctrl+Shift+S)", "分割表示 (Ctrl+Shift+S)"),
+    ("Öbür bölmeye kopyala", "もう一方のウィンドウにコピー"),
+    ("Öbür bölmeye taşı", "もう一方のウィンドウに移動"),
+    ("Çift bölme: iki klasör yan yana ★", "分割表示: 2 つのフォルダーを並べて表示 ★"),
+    ("Çift bölmede öbür bölmeye geç ★", "分割表示でもう一方に切り替え ★"),
 ];

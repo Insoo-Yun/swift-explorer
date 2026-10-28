@@ -362,4 +362,9 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Zip dosyasına sıkıştır", "In ZIP-Datei komprimieren"),
     ("Çıkartılıyor: {}", "Wird entpackt: {}"),
     ("Sıkıştırılıyor: {}", "Wird komprimiert: {}"),
+    ("Çift bölme (Ctrl+Shift+S)", "Geteilte Ansicht (Ctrl+Shift+S)"),
+    ("Öbür bölmeye kopyala", "In den anderen Bereich kopieren"),
+    ("Öbür bölmeye taşı", "In den anderen Bereich verschieben"),
+    ("Çift bölme: iki klasör yan yana ★", "Geteilte Ansicht: zwei Ordner nebeneinander ★"),
+    ("Çift bölmede öbür bölmeye geç ★", "In der geteilten Ansicht zum anderen Bereich wechseln ★"),
 ];

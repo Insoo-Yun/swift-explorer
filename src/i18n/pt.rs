@@ -362,4 +362,9 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Zip dosyasına sıkıştır", "Compactar em arquivo ZIP"),
     ("Çıkartılıyor: {}", "Extraindo: {}"),
     ("Sıkıştırılıyor: {}", "Compactando: {}"),
+    ("Çift bölme (Ctrl+Shift+S)", "Exibição dividida (Ctrl+Shift+S)"),
+    ("Öbür bölmeye kopyala", "Copiar para o outro painel"),
+    ("Öbür bölmeye taşı", "Mover para o outro painel"),
+    ("Çift bölme: iki klasör yan yana ★", "Exibição dividida: duas pastas lado a lado ★"),
+    ("Çift bölmede öbür bölmeye geç ★", "Alternar para o outro painel na exibição dividida ★"),
 ];
