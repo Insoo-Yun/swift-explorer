@@ -334,4 +334,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Komut paleti: bütün komutları adıyla ara ★", "命令面板：按名称查找任意命令 ★"),
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "此文件夹所在 git 仓库的当前分支"),
     ("İçindekiler", "内容"),
+    ("Klasöre git", "转到文件夹"),
 ];

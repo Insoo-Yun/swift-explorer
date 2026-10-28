@@ -4212,6 +4212,16 @@ impl App {
         for (v, n) in names.enumerate() {
             out.push((format!("{theme}: {n}"), String::new(), Cmd::Theme(v as u8)));
         }
+        // Sabitlenen, bilinen, sürücüler ve son gidilen klasörler
+        let go = crate::i18n::t("Klasöre git");
+        let drives: Vec<PathBuf> = self.drives.lock().unwrap().iter().map(|d| d.root.clone()).collect();
+        let places = self.bookmarks.iter().chain(self.known.iter().map(|(_, _, p)| p)).chain(&drives).chain(self.recent.iter().take(20));
+        let mut seen = std::collections::HashSet::new();
+        for p in places {
+            if !crate::tab::is_virtual(p) && seen.insert(p) {
+                out.push((format!("{go}: {}", self.loc_name(p)), short(&p.display().to_string(), 44), Cmd::Do(Action::Navigate(p.clone()))));
+            }
+        }
         out
     }
 

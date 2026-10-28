@@ -334,4 +334,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Komut paleti: bütün komutları adıyla ara ★", "Палитра команд: поиск любой команды по названию ★"),
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "Текущая ветка git-репозитория, в котором находится эта папка"),
     ("İçindekiler", "Содержимое"),
+    ("Klasöre git", "Перейти к папке"),
 ];

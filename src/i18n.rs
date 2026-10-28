@@ -493,6 +493,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Komut paleti: bütün komutları adıyla ara ★", "Command palette: find any command by name ★"),
     ("Bu klasörün bulunduğu git deposunun etkin dalı", "Current branch of the git repository this folder is in"),
     ("İçindekiler", "Contents"),
+    ("Klasöre git", "Go to folder"),
 ];
 
 #[cfg(test)]
