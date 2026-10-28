@@ -37,6 +37,11 @@ Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with 
 - Uses Windows' own icons, thumbnails and file type names.
 - Every Explorer shortcut works the same way. Press F1 for the full list.
 - Ctrl+Shift+P opens a command palette: type part of a command's name, like `hidden` or `large icons`, and press Enter.
+- Ctrl+Shift+S shows two folders side by side. F6 switches between them, and dragging between them copies or moves files.
+- Pressing F2 with several items selected opens batch rename: find and replace, a name pattern with `{name}`, `{n}` and `{date}`, and upper or lower case, with a preview of every new name.
+- Zip files can be extracted and created from the right-click menu.
+- Search results can be narrowed to one file extension with the buttons above the list.
+- The details pane lists what's inside a selected folder, and the status bar shows the git branch when the folder is in a git repository.
 - Typing in the search box filters the current folder instantly. Press Enter to search all subfolders; `*` and `?` wildcards work.
 - Typing `cmd`, `powershell`, `pwsh` or `wt` in the address bar opens that terminal in the current folder, and `terminal` opens Windows Terminal. On Linux, `terminal` opens your default terminal, and a terminal's name (`konsole`, `kitty`…) opens that one.
 - Copy, cut, paste and drag and drop work in both directions with Explorer and the desktop.

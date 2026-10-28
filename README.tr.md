@@ -37,6 +37,11 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Windows'un kendi ikonları, küçük resimleri ve tür adları kullanılır.
 - Explorer'daki kısayolların hepsi aynı çalışır. F1 tam listeyi gösterir.
 - Ctrl+Shift+P komut paletini açar: `gizli` ya da `büyük simge` gibi komut adının bir kısmını yazıp Enter'a basın.
+- Ctrl+Shift+S iki klasörü yan yana gösterir. F6 ikisi arasında geçer, aralarında sürükleyince dosyalar kopyalanır ya da taşınır.
+- Birden çok öğe seçiliyken F2 toplu yeniden adlandırmayı açar: bul ve değiştir, `{name}`, `{n}` ve `{date}` içeren ad şablonu, büyük ya da küçük harf. Her yeni ad uygulanmadan önce listede görünür.
+- Zip dosyaları sağ tık menüsünden açılıp oluşturulabilir.
+- Arama sonuçları, listenin üstündeki düğmelerle tek bir uzantıya daraltılabilir.
+- Ayrıntılar bölmesi seçili klasörün içindekileri listeler. Klasör bir git deposundaysa durum çubuğunda dal adı görünür.
 - Arama kutusuna yazdıkça bulunduğunuz klasör filtrelenir. Enter'a basınca tüm alt klasörlerde arar; `*` ve `?` joker karakterleri çalışır.
 - Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır, `terminal` ise Windows Terminal'i açar. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
