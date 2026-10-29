@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR};
+use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR, PWSTR};
 use windows::Win32::Foundation::{
     BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, LPARAM, LRESULT, POINT, RECT,
     SIZE, S_OK, WPARAM,
@@ -29,7 +29,8 @@ use windows::Win32::UI::Shell::{
     SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
+    CreatePopupMenu, DestroyMenu, GetMenuItemCount, GetMenuItemInfoW, HMENU, MENUITEMINFOW, MFS_DISABLED, MFT_SEPARATOR,
+    MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, GetAncestor, GetCursorPos, GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
     HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_SHOWNORMAL, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT,
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, HHOOK, WH_CBT, WS_CHILD,
@@ -386,6 +387,165 @@ pub fn context_menu(hwnd: isize, paths: &[PathBuf], extended: bool) -> MenuResul
     }
 }
 
+// ---------------------------------------------------------------- uygulama menü öğeleri
+
+/// Windows sağ tık menüsünden okunan bir öğe; `children` doluysa alt menüdür
+pub struct ShellEntry {
+    /// Gizleme ayarında kullanılan kimlik: komutun fiili, yoksa adı
+    pub key: String,
+    pub text: String,
+    pub id: u32,
+    pub icon: Option<egui::TextureHandle>,
+    pub children: Vec<ShellEntry>,
+}
+
+/// Okunmuş menü. Öğe çalıştırılana kadar Windows'un menü nesnesi canlı tutulur.
+pub struct ShellMenu {
+    cm: IContextMenu,
+    menu: HMENU,
+    _arr: IShellItemArray,
+    _pidls: Pidls,
+    pub items: Vec<ShellEntry>,
+}
+
+impl Drop for ShellMenu {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyMenu(self.menu);
+        }
+    }
+}
+
+/// Uygulamada zaten karşılığı olan komutlar listelenmez
+const BUILT_IN_VERBS: &[&str] = &["open", "explore", "opennewwindow", "cut", "copy", "paste", "delete", "rename", "properties", "copyaspath", "pintohome"];
+
+/// Menü metnindeki "&" kısayol işaretlerini ve sekmeden sonraki kısayolu atar
+fn menu_text(raw: &str) -> String {
+    let raw = raw.split('\t').next().unwrap_or("");
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            if chars.peek() == Some(&'&') {
+                out.push('&');
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
+}
+
+impl ShellMenu {
+    /// Seçili öğelerin Windows menüsünü okur; göstermez
+    pub fn query(paths: &[PathBuf], ctx: &egui::Context) -> Option<ShellMenu> {
+        unsafe {
+            let (arr, pidls) = item_array(paths)?;
+            let cm: IContextMenu = arr.BindToHandler(None, &BHID_SFUIObject).ok()?;
+            let menu = CreatePopupMenu().ok()?;
+            let mut sm = ShellMenu { cm, menu, _arr: arr, _pidls: pidls, items: Vec::new() };
+            sm.cm.QueryContextMenu(menu, 0, 1, 0x7FFF, CMF_NORMAL).ok()?;
+            sm.items = sm.read(menu, ctx, 0);
+            Some(sm)
+        }
+    }
+
+    unsafe fn read(&self, menu: HMENU, ctx: &egui::Context, depth: u32) -> Vec<ShellEntry> {
+        let mut out = Vec::new();
+        let n = GetMenuItemCount(menu);
+        for i in 0..n.max(0) as u32 {
+            let mut info = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_ID | MIIM_SUBMENU | MIIM_FTYPE | MIIM_STATE | MIIM_STRING | MIIM_BITMAP,
+                ..Default::default()
+            };
+            if GetMenuItemInfoW(menu, i, true, &mut info).is_err() || info.fType.contains(MFT_SEPARATOR) || info.fState.contains(MFS_DISABLED) {
+                continue;
+            }
+            let mut buf = vec![0u16; info.cch as usize + 1];
+            info.dwTypeData = PWSTR(buf.as_mut_ptr());
+            info.cch += 1;
+            if GetMenuItemInfoW(menu, i, true, &mut info).is_err() {
+                continue;
+            }
+            let text = menu_text(&String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)]));
+            if text.is_empty() {
+                continue;
+            }
+            let verb = if info.hSubMenu.is_invalid() { self.verb(info.wID) } else { None };
+            if verb.as_deref().is_some_and(|v| BUILT_IN_VERBS.iter().any(|b| v.eq_ignore_ascii_case(b))) {
+                continue;
+            }
+            let mut children = Vec::new();
+            if !info.hSubMenu.is_invalid() {
+                if depth > 2 {
+                    continue;
+                }
+                // "Gönder", "Birlikte aç" gibi alt menüler ancak açılırken doldurulur
+                self.init_popup(info.hSubMenu, i);
+                children = self.read(info.hSubMenu, ctx, depth + 1);
+                if children.is_empty() {
+                    continue;
+                }
+            }
+            // HBMMENU_* sabitleri (1..11 ve -1) gerçek bitmap değildir
+            let hbm = info.hbmpItem;
+            let icon = if (hbm.0 as isize) > 11 {
+                hbitmap_bgra(hbm).map(|(b, w, h)| ctx.load_texture(format!("shellmenu-{depth}-{i}-{text}"), bgra_to_image(b, w, h), egui::TextureOptions::LINEAR))
+            } else {
+                None
+            };
+            let key = match &verb {
+                Some(v) => format!("verb:{v}"),
+                None => format!("text:{text}"),
+            };
+            out.push(ShellEntry { key, text, id: info.wID, icon, children });
+        }
+        out
+    }
+
+    unsafe fn verb(&self, id: u32) -> Option<String> {
+        let mut verb = [0u16; 128];
+        self.cm.GetCommandString(id as usize - 1, GCS_VERBW, None, PSTR(verb.as_mut_ptr() as *mut u8), verb.len() as u32).ok()?;
+        let len = verb.iter().position(|&c| c == 0).unwrap_or(0);
+        Some(String::from_utf16_lossy(&verb[..len])).filter(|v| !v.is_empty())
+    }
+
+    unsafe fn init_popup(&self, sub: HMENU, index: u32) {
+        let (wp, lp) = (WPARAM(sub.0 as usize), LPARAM(index as isize));
+        if let Ok(cm3) = self.cm.cast::<IContextMenu3>() {
+            let _ = cm3.HandleMenuMsg2(WM_INITMENUPOPUP, wp, lp, None);
+        } else if let Ok(cm2) = self.cm.cast::<IContextMenu2>() {
+            let _ = cm2.HandleMenuMsg(WM_INITMENUPOPUP, wp, lp);
+        }
+    }
+
+    /// Okunan öğelerden birini çalıştırır
+    pub fn invoke(&self, hwnd: isize, id: u32) -> MenuResult {
+        unsafe {
+            if self.verb(id).is_some_and(|v| v.eq_ignore_ascii_case("rename")) {
+                return MenuResult::Rename;
+            }
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            let cmd = (id - 1) as usize;
+            let info = CMINVOKECOMMANDINFOEX {
+                cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+                fMask: 0x4000 | 0x2000_0000, // CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE
+                hwnd: HWND(hwnd as *mut c_void),
+                lpVerb: PCSTR(cmd as *const u8),
+                lpVerbW: PCWSTR(cmd as *const u16),
+                nShow: SW_SHOWNORMAL.0,
+                ptInvoke: pt,
+                ..Default::default()
+            };
+            let _ = self.cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
+            MenuResult::Invoked
+        }
+    }
+}
+
 // ---------------------------------------------------------------- dışarı sürükle-bırak
 
 #[implement(IDropSource)]
@@ -447,6 +607,35 @@ pub fn accent_color() -> Option<egui::Color32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_text_drops_accelerators() {
+        assert_eq!(menu_text("&Aç"), "Aç");
+        assert_eq!(menu_text("Kes && yapıştır\tCtrl+X"), "Kes & yapıştır");
+        assert_eq!(menu_text("  7-&Zip "), "7-Zip");
+    }
+
+    #[test]
+    fn reads_the_menu_of_a_file_without_built_in_commands() {
+        init_worker_thread();
+        let dir = std::env::temp_dir().join(format!("swift-explorer-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        let ctx = egui::Context::default();
+        let menu = ShellMenu::query(std::slice::from_ref(&file), &ctx).expect("menü okunamadı");
+        fn walk(items: &[ShellEntry], depth: usize) {
+            for e in items {
+                println!("{}{}  [{}] icon={}", "  ".repeat(depth), e.text, e.key, e.icon.is_some());
+                assert!(!BUILT_IN_VERBS.iter().any(|b| e.key.eq_ignore_ascii_case(&format!("verb:{b}"))));
+                walk(&e.children, depth + 1);
+            }
+        }
+        walk(&menu.items, 0);
+        assert!(!menu.items.is_empty());
+        drop(menu);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// Ön-çarpılmış pikselde hiçbir renk kanalı alfadan büyük olamaz; olursa
     /// çizimde yarı saydam kenarlar beyaza çalar.
