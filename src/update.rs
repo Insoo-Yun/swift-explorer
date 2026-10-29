@@ -56,6 +56,23 @@ fn scoop_install(exe: &Path) -> bool {
     exe.parent().is_some_and(|d| d.join("install.json").exists() && d.join("manifest.json").exists())
 }
 
+/// Kayıt defterine yazılacak exe yolu. Scoop her sürümü ayrı klasöre kurar ve eskisini siler;
+/// `current` bağlantısı hep son sürümü gösterir. Kayıt onu göstersin ki Scoop güncelledikten sonra da çalışsın.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn stable_exe() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(stable_path)
+}
+
+fn stable_path(exe: PathBuf) -> PathBuf {
+    if scoop_install(&exe) {
+        let current = exe.parent().filter(|d| d.file_name().is_some_and(|n| n != "current")).and_then(|d| Some(d.parent()?.join("current").join(exe.file_name()?)));
+        if let Some(c) = current.filter(|c| c.exists()) {
+            return c;
+        }
+    }
+    exe
+}
+
 /// Flatpak ve Scoop kendi güncellemesini yapar
 pub fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -228,7 +245,7 @@ pub fn restart() {
 
 #[cfg(test)]
 mod tests {
-    use super::{install, newer, roll_back_if_failing, with_ext};
+    use super::{install, newer, roll_back_if_failing, stable_path, with_ext};
 
     /// Ağ gerektirir: cargo test -- --ignored
     #[test]
@@ -269,6 +286,24 @@ mod tests {
         assert_eq!(std::fs::read_to_string(with_ext(&exe, ".skip")).unwrap(), "0.7.0");
         assert!(!with_ext(&exe, ".pending").exists());
         assert!(!roll_back_if_failing(&exe, "0.6.0"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scoop_registers_the_current_link() {
+        let dir = std::env::temp_dir().join(format!("swift-scoop-test-{}", std::process::id()));
+        let version = dir.join("0.7.0");
+        let current = dir.join("current");
+        for d in [&version, &current] {
+            std::fs::create_dir_all(d).unwrap();
+            for f in ["SwiftExplorer.exe", "install.json", "manifest.json"] {
+                std::fs::write(d.join(f), b"").unwrap();
+            }
+        }
+        assert_eq!(stable_path(version.join("SwiftExplorer.exe")), current.join("SwiftExplorer.exe"));
+        assert_eq!(stable_path(current.join("SwiftExplorer.exe")), current.join("SwiftExplorer.exe"));
+        std::fs::remove_file(version.join("install.json")).unwrap();
+        assert_eq!(stable_path(version.join("SwiftExplorer.exe")), version.join("SwiftExplorer.exe"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

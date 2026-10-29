@@ -376,7 +376,7 @@ pub fn set_autostart(on: bool) {
         unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
         return;
     }
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = crate::update::stable_exe() else { return };
     let mut cmd = OsString::from("\"");
     cmd.push(exe.as_os_str());
     cmd.push(format!("\" {BACKGROUND_ARG}"));
@@ -426,7 +426,7 @@ fn reg_delete_tree(key: &str) {
 
 /// `"C:\...\SwiftExplorer.exe" "%1"`; argümansız hali Win+E içindir
 fn launch_command(arg: &str) -> Option<OsString> {
-    let exe = std::env::current_exe().ok()?;
+    let exe = crate::update::stable_exe().ok()?;
     let mut cmd = OsString::from("\"");
     cmd.push(exe.as_os_str());
     cmd.push("\"");
