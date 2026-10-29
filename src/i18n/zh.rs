@@ -367,4 +367,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Öbür bölmeye taşı", "移动到另一侧窗格"),
     ("Çift bölme: iki klasör yan yana ★", "拆分视图：两个文件夹并排显示 ★"),
     ("Çift bölmede öbür bölmeye geç ★", "在拆分视图中切换到另一侧窗格 ★"),
+    ("Bu listeyi düzenle…", "编辑此列表…"),
+    ("Sağ tık menüsündeki uygulamalar", "右键菜单中的应用"),
+    ("İşaretli olanlar menüde görünür. Windows'un tam menüsü Shift + sağ tıkta her zaman açılır.", "勾选的项目会显示在菜单中。按住 Shift 右键单击始终会打开完整的 Windows 菜单。"),
 ];

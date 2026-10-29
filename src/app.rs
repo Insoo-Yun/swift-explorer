@@ -51,6 +51,8 @@ struct Config {
     last_update_check: u64,
     /// Varsayılan dosya yöneticisi yapılmadan önceki uygulama (Linux'ta geri yüklemek için)
     previous_folder_app: Option<String>,
+    /// Sağ tık menüsünde gösterilmeyen Windows menü öğeleri
+    hidden_shell_items: Vec<String>,
 }
 
 impl Default for Config {
@@ -74,6 +76,7 @@ impl Default for Config {
             auto_update: true,
             last_update_check: 0,
             previous_folder_app: None,
+            hidden_shell_items: vec![],
         }
     }
 }
@@ -266,6 +269,8 @@ enum Action {
     Extract(PathBuf),
     Compress,
     ToggleSplit,
+    ShellInvoke(u32),
+    EditShellMenu,
     /// Seçili öğeleri öbür bölmenin klasörüne kopyala ya da taşı
     ToOtherPane { cut: bool },
     Undo,
@@ -277,6 +282,8 @@ enum Dialog {
     Conflict { files: Vec<PathBuf>, dest: PathBuf, cut: bool, names: Vec<String> },
     Help,
     Palette { query: String, sel: usize },
+    /// Windows menü öğelerinden hangilerinin görüneceği: (kimlik, ad)
+    ShellItems(Vec<(String, String)>),
     BatchRename { items: Vec<crate::rename::Item>, rule: crate::rename::Rule },
     #[cfg(not(windows))]
     Properties(Box<crate::properties::Properties>),
@@ -375,6 +382,11 @@ pub struct App {
     hwnd: Option<isize>,
     renaming: Option<Renaming>,
     undo: Vec<UndoOp>,
+    /// Sağ tık menüsüne eklenen Windows menü öğeleri; menü açıkken seçili öğeler için okunur
+    shell_menu: Option<(Vec<PathBuf>, Option<shell::ShellMenu>)>,
+    /// Bu karede bir öğe menüsü çizildi
+    shell_wanted: bool,
+    hidden_shell: Vec<String>,
     /// Yan yana iki bölme: soldaki ve sağdaki sekmenin sırası
     split: Option<[usize; 2]>,
     /// Klavyenin ve komutların gittiği bölme (0 sol, 1 sağ)
@@ -1170,6 +1182,9 @@ impl App {
             git_branch: (PathBuf::new(), None),
             split: None,
             focus: 0,
+            shell_menu: None,
+            shell_wanted: false,
+            hidden_shell: cfg.hidden_shell_items,
             undo: vec![],
             subdirs: HashMap::new(),
             subdirs_pending: Default::default(),
@@ -1223,6 +1238,7 @@ impl App {
             theme: self.theme,
             lang: self.lang,
             recent: self.recent.clone(),
+            hidden_shell_items: self.hidden_shell.clone(),
             tips_dismissed: self.tips_dismissed,
             grouped: self.grouped.clone(),
             background: self.background,
@@ -1913,6 +1929,20 @@ impl App {
                 if !paths.is_empty() && !busy_here {
                     let job = crate::archive::spawn_compress(paths, ctx.clone());
                     self.push_job(job, true);
+                }
+            }
+            Action::ShellInvoke(id) => {
+                let menu = self.shell_menu.as_ref().and_then(|(_, m)| m.as_ref());
+                if let (Some(m), Some(hwnd)) = (menu, self.hwnd) {
+                    if let MenuResult::Rename = m.invoke(hwnd, id) {
+                        self.apply(Action::Rename);
+                    }
+                }
+            }
+            Action::EditShellMenu => {
+                if let Some((_, Some(m))) = &self.shell_menu {
+                    let items = m.items.iter().map(|e| (e.key.clone(), e.text.clone())).collect();
+                    self.dialog = Dialog::ShellItems(items);
                 }
             }
             Action::ToggleSplit => {
@@ -3251,7 +3281,29 @@ fn mi(ui: &mut egui::Ui, icon: &str, text: &str) -> bool {
 }
 
 /// Öğe sağ tık menüsü (sık kullanılanlar + Windows'un tam menüsü)
-fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, actions: &mut Vec<Action>) {
+fn shell_entry(ui: &mut egui::Ui, e: &shell::ShellEntry, actions: &mut Vec<Action>) {
+    if !e.children.is_empty() {
+        ui.menu_button(&e.text, |ui| {
+            for c in &e.children {
+                shell_entry(ui, c, actions);
+            }
+        });
+        return;
+    }
+    let b = match &e.icon {
+        Some(tex) => egui::Button::image_and_text(egui::Image::new(tex).fit_to_exact_size(egui::vec2(16.0, 16.0)), &e.text),
+        None => egui::Button::new(&e.text),
+    };
+    if ui.add(b).clicked() {
+        actions.push(Action::ShellInvoke(e.id));
+        ui.close_menu();
+    }
+}
+
+/// `shell`: seçili öğelerin Windows menüsünden okunan uygulama öğeleri, `hidden`: gizlenenler
+#[allow(clippy::too_many_arguments)]
+fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, shell: Option<&shell::ShellMenu>, hidden: &[String], wanted: &mut bool, actions: &mut Vec<Action>) {
+    *wanted = true;
     ui.set_min_width(240.0);
     if mi(ui, "▶", crate::i18n::t("Aç                              Enter")) {
         actions.push(Action::OpenSelected);
@@ -3332,6 +3384,16 @@ fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, acti
     if mi(ui, "ℹ", crate::i18n::t("Özellikler                   Alt+Enter")) {
         actions.push(Action::Properties(path.to_path_buf()));
         ui.close_menu();
+    }
+    if let Some(sm) = shell {
+        ui.separator();
+        for e in sm.items.iter().filter(|e| !hidden.contains(&e.key)) {
+            shell_entry(ui, e, actions);
+        }
+        if mi(ui, "⚙", crate::i18n::t("Bu listeyi düzenle…")) {
+            actions.push(Action::EditShellMenu);
+            ui.close_menu();
+        }
     }
     if NATIVE_MENU {
         ui.separator();
@@ -3645,7 +3707,8 @@ impl App {
     }
 
     fn details_view(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        let App { tabs, active, images, renaming, type_names, show_ext, accent, clipboard, dir_sizes, sort, asc, item_rects, .. } = self;
+        let App { tabs, active, images, renaming, type_names, show_ext, accent, clipboard, dir_sizes, sort, asc, item_rects, shell_menu, shell_wanted, hidden_shell, .. } = self;
+        let shell_items = shell_menu.as_ref().and_then(|(_, m)| m.as_ref());
         let (sort, asc, show_ext, accent) = (*sort, *asc, *show_ext, *accent);
         let t = &mut tabs[*active];
         let in_search = t.search.is_some();
@@ -3825,7 +3888,7 @@ impl App {
                     }
                     if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
                         let (p, d) = (e.path.clone(), e.is_dir);
-                        resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
+                        resp.context_menu(|ui| item_menu(ui, &p, d, in_search, shell_items, hidden_shell, shell_wanted, actions));
                     }
                 });
             });
@@ -4013,7 +4076,8 @@ impl App {
                         });
                         if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
                             let (p, d) = (e.path.clone(), e.is_dir);
-                            resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
+                            let shell_items = self.shell_menu.as_ref().and_then(|(_, m)| m.as_ref());
+                            resp.context_menu(|ui| item_menu(ui, &p, d, in_search, shell_items, &self.hidden_shell, &mut self.shell_wanted, actions));
                         }
                     }
                 }
@@ -4716,6 +4780,31 @@ impl App {
                 }
             }
             Dialog::Palette { query, sel } => keep = self.palette(ctx, query, sel, actions),
+            Dialog::ShellItems(items) => {
+                let resp = egui::Modal::new(egui::Id::new("shell_items")).show(ctx, |ui| {
+                    ui.set_width(440.0);
+                    ui.heading(crate::i18n::t("Sağ tık menüsündeki uygulamalar"));
+                    ui.label(RichText::new(crate::i18n::t("İşaretli olanlar menüde görünür. Windows'un tam menüsü Shift + sağ tıkta her zaman açılır.")).weak());
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                        for (key, text) in items.iter() {
+                            let mut on = !self.hidden_shell.contains(key);
+                            if ui.checkbox(&mut on, text.as_str()).changed() {
+                                if on {
+                                    self.hidden_shell.retain(|k| k != key);
+                                } else {
+                                    self.hidden_shell.push(key.clone());
+                                }
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.button(crate::i18n::t("Kapat")).clicked()).inner
+                });
+                if resp.inner || resp.should_close() {
+                    keep = false;
+                }
+            }
             Dialog::BatchRename { items, rule } => keep = self.batch_rename(ctx, items, rule),
             Dialog::Help => {
                 let resp = egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
@@ -4873,6 +4962,7 @@ impl eframe::App for App {
         }
 
         let mut actions = Vec::new();
+        self.shell_wanted = false;
         self.images.poll(ctx);
         self.reveal_when_ready(ctx);
         if self.revealed {
@@ -5033,6 +5123,15 @@ impl eframe::App for App {
 
         for a in actions {
             self.apply(a);
+        }
+        if self.shell_wanted {
+            let paths = self.tabs[self.active].selected_paths();
+            if self.shell_menu.as_ref().is_none_or(|(p, _)| *p != paths) {
+                let menu = shell::ShellMenu::query(&paths, ctx);
+                self.shell_menu = Some((paths, menu));
+            }
+        } else {
+            self.shell_menu = None;
         }
 
         let t = &self.tabs[self.active];

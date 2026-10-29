@@ -367,4 +367,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Öbür bölmeye taşı", "Mover para o outro painel"),
     ("Çift bölme: iki klasör yan yana ★", "Exibição dividida: duas pastas lado a lado ★"),
     ("Çift bölmede öbür bölmeye geç ★", "Alternar para o outro painel na exibição dividida ★"),
+    ("Bu listeyi düzenle…", "Editar esta lista…"),
+    ("Sağ tık menüsündeki uygulamalar", "Aplicativos no menu de contexto"),
+    ("İşaretli olanlar menüde görünür. Windows'un tam menüsü Shift + sağ tıkta her zaman açılır.", "Os itens marcados aparecem no menu. O menu completo do Windows sempre abre com Shift + clique direito."),
 ];

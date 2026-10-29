@@ -367,4 +367,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Öbür bölmeye taşı", "もう一方のウィンドウに移動"),
     ("Çift bölme: iki klasör yan yana ★", "分割表示: 2 つのフォルダーを並べて表示 ★"),
     ("Çift bölmede öbür bölmeye geç ★", "分割表示でもう一方に切り替え ★"),
+    ("Bu listeyi düzenle…", "この一覧を編集…"),
+    ("Sağ tık menüsündeki uygulamalar", "右クリック メニューのアプリ"),
+    ("İşaretli olanlar menüde görünür. Windows'un tam menüsü Shift + sağ tıkta her zaman açılır.", "チェックした項目がメニューに表示されます。Shift + 右クリックでは常に Windows の完全なメニューが開きます。"),
 ];
