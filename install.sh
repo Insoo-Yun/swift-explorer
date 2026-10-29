@@ -20,6 +20,11 @@ refresh_caches() {
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
+    # Hand folders back to the previous file manager while the binary still exists.
+    # Older builds don't know the flag and would open a window instead.
+    if [ -x "$BIN" ] && grep -qa -- "--unregister" "$BIN"; then
+        "$BIN" --unregister || true
+    fi
     rm -f "$BIN" "$DESKTOP" "$ICON" "$METAINFO"
     refresh_caches
     echo "Swift Explorer removed. Settings are kept in ~/.config/SwiftExplorer."
