@@ -370,4 +370,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu listeyi düzenle…", "この一覧を編集…"),
     ("Sağ tık menüsündeki uygulamalar", "右クリック メニューのアプリ"),
     ("İşaretli olanlar menüde görünür. Windows'un tam menüsü Shift + sağ tıkta her zaman açılır.", "チェックした項目がメニューに表示されます。Shift + 右クリックでは常に Windows の完全なメニューが開きます。"),
+    ("Paylaş", "共有"),
 ];
