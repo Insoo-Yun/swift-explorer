@@ -30,8 +30,9 @@ pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 fn main() -> eframe::Result<()> {
     let arg = std::env::args().nth(1);
     let after_update = arg.as_deref() == Some(update::AFTER_UPDATE_ARG);
+    let restart = arg.as_deref() == Some(update::RESTART_ARG);
     let hidden = after_update || arg.as_deref() == Some(win::BACKGROUND_ARG);
-    if after_update {
+    if after_update || restart {
         // Eski sürüm boruyu bırakıp çıkana dek bekle
         for _ in 0..100 {
             if !win::is_serving() {
@@ -41,7 +42,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     // Explorer sürücüyü "%1" ile "C:\" diye verir; Windows bunu C:" olarak ayrıştırır
-    let start = arg.filter(|_| !hidden).map(|a| PathBuf::from(a.trim_end_matches('"')));
+    let start = arg.filter(|_| !hidden && !restart).map(|a| PathBuf::from(a.trim_end_matches('"')));
     if hidden && win::is_serving() || !hidden && win::hand_off(start.as_deref()) {
         return Ok(());
     }

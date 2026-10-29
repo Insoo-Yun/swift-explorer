@@ -390,6 +390,8 @@ pub struct App {
     checks_updates: bool,
     /// Menüden istenen denetim sürüyor
     update_checking: bool,
+    /// Kullanıcı menüden yeniden başlatmayı seçti: kapanınca yeni sürüm pencereyle açılır
+    restart_on_close: bool,
     last_update_check: Arc<AtomicU64>,
     /// Yeni sürüm kuruldu: pencere kapanınca gizlenmek yerine yeni sürüm başlatılır
     update_installed: bool,
@@ -1228,6 +1230,7 @@ impl App {
             update_wake,
             checks_updates,
             update_checking: false,
+            restart_on_close: false,
             last_update_check,
             update_installed: false,
             start_hidden: hidden,
@@ -2849,7 +2852,15 @@ impl App {
                         self.auto_update.store(on, Relaxed);
                     }
                 }
-                if self.checks_updates && !self.update_installed {
+                if self.update_installed {
+                    // Kopyalama sürerken kapanırsa iş yarıda kalır
+                    let r = ui.add_enabled(!fsutil::jobs_running(), egui::Button::new(crate::i18n::t("Yeni sürüme geçmek için yeniden başlat")));
+                    if r.clicked() {
+                        self.restart_on_close = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.close_menu();
+                    }
+                } else if self.checks_updates {
                     let label = if self.update_checking { "Güncellemeler denetleniyor…" } else { "Güncellemeleri şimdi denetle" };
                     if ui.add_enabled(!self.update_checking, egui::Button::new(crate::i18n::t(label))).clicked() {
                         self.update_checking = self.update_wake.send(true).is_ok();
@@ -5048,7 +5059,9 @@ impl eframe::App for App {
         self.poll_update();
         if self.update_installed && ctx.input(|i| i.viewport().close_requested()) {
             // Gizlenmek yerine çık; yeni sürüm arka planda bekleyecek
-            if self.resident && self.background {
+            if self.restart_on_close {
+                crate::update::restart();
+            } else if self.resident && self.background {
                 crate::update::launch_hidden();
             }
         } else if self.resident && self.background && ctx.input(|i| i.viewport().close_requested()) {

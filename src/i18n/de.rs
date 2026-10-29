@@ -90,6 +90,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Güncellemeler denetleniyor…", "Suche nach Updates…"),
     ("Swift Explorer güncel: {}", "Swift Explorer ist aktuell: {}"),
     ("Güncelleme denetlenemedi: {}", "Suche nach Updates fehlgeschlagen: {}"),
+    ("Yeni sürüme geçmek için yeniden başlat", "Neu starten, um zur neuen Version zu wechseln"),
     ("Tema", "Design"),
     ("Sistem", "System"),
     ("Açık", "Hell"),

@@ -14,6 +14,8 @@ const LATEST: &str = "https://github.com/misutesu-desu/swift-explorer/releases/l
 /// Güncellemeyi kuran gizli süreç bu bayrakla yeni sürümü başlatır; yeni süreç
 /// eskisinin çıkmasını bekleyip arka planda bekler.
 pub const AFTER_UPDATE_ARG: &str = "--after-update";
+/// Kullanıcı "yeniden başlat" dedi: yeni süreç eskisinin çıkmasını bekleyip pencereyi açar
+pub const RESTART_ARG: &str = "--restart";
 
 pub enum Found {
     /// Yeni exe yerine kondu
@@ -214,6 +216,13 @@ fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
 pub fn launch_hidden() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::process::Command::new(exe).arg(AFTER_UPDATE_ARG).spawn();
+    }
+}
+
+/// Kurulan sürümü pencereyle başlatır; yeni süreç eskisinin kapanmasını bekler, son sekmeleri açar
+pub fn restart() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).arg(RESTART_ARG).spawn();
     }
 }
 
