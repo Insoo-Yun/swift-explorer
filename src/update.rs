@@ -111,6 +111,8 @@ fn with_ext(exe: &Path, ext: &str) -> PathBuf {
 /// Önceki güncellemeden kalan eski exe; onu çalıştıran süreç kapandıysa silinebilir
 pub fn remove_old() {
     if let Ok(exe) = std::env::current_exe() {
+        // İndirme sırasında süreç kapandıysa yarım dosya kalır; denetleyici tek süreçte çalıştığından başka indirme yok
+        let _ = std::fs::remove_file(with_ext(&exe, ".new"));
         // Yeni sürüm açıldığını doğrulamadıysa eski exe geri dönüş için kalsın
         if !with_ext(&exe, ".pending").exists() {
             let _ = std::fs::remove_file(with_ext(&exe, ".old"));
