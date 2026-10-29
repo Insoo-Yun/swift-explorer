@@ -101,24 +101,47 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// Güncelleme denetleyicisinin arayüze bildirdikleri
+enum UpdateNews {
+    Found(crate::update::Found),
+    /// Menüden denetlendi, yeni sürüm yok
+    Current,
+    /// Menüden denetlendi, sunucuya ulaşılamadı
+    Failed(String),
+}
+
 /// Son denetimden bu yana bir saat geçtiyse yeni sürümü denetler: açılıştan biraz sonra,
 /// saatte bir ve dönen kanala sinyal gelince, yani pencere yeniden açılınca. Pencere gizliyken
 /// de çalışır: yeni sürüm kurulunca gizli süreç onu arka planda başlatıp çıkar. `enabled` yoksa denetlemez.
-fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, last_check: Arc<AtomicU64>, ctx: egui::Context) -> (std::sync::mpsc::Receiver<crate::update::Found>, std::sync::mpsc::Sender<()>) {
+/// Kanala `true` gelirse kullanıcı menüden istemiştir: süreye ve otomatik güncelleme ayarına bakmadan denetler.
+fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, last_check: Arc<AtomicU64>, ctx: egui::Context) -> (std::sync::mpsc::Receiver<UpdateNews>, std::sync::mpsc::Sender<bool>) {
+    use std::sync::mpsc::RecvTimeoutError;
     let (tx, rx) = std::sync::mpsc::channel();
-    let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel::<bool>();
     let Some(enabled) = enabled.filter(|_| crate::update::enabled()) else { return (rx, wake_tx) };
     std::thread::spawn(move || {
         crate::update::remove_old();
-        // Açılışla yarışmasın
-        std::thread::sleep(Duration::from_secs(15));
+        // Açılışla yarışmasın; menüden istenirse beklemeden denetle
+        let mut manual = false;
+        let started = Instant::now();
+        while let Some(left) = Duration::from_secs(15).checked_sub(started.elapsed()) {
+            match wake_rx.recv_timeout(left) {
+                Ok(true) => {
+                    manual = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
         let mut told = None;
         loop {
             let now = unix_now();
             let last = last_check.load(Relaxed);
             // Saat geri alındıysa da denetle
             let due = now < last || now - last >= UPDATE_INTERVAL;
-            if enabled.load(Relaxed) && due {
+            if manual || enabled.load(Relaxed) && due {
                 last_check.store(now, Relaxed);
                 match crate::update::check() {
                     Ok(Some(crate::update::Found::Installed(v))) => {
@@ -126,31 +149,39 @@ fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, last_check: Arc<Atomic
                             crate::update::launch_hidden();
                             std::process::exit(0);
                         }
-                        let _ = tx.send(crate::update::Found::Installed(v));
+                        let _ = tx.send(UpdateNews::Found(crate::update::Found::Installed(v)));
                         ctx.request_repaint();
                         return;
                     }
                     Ok(Some(crate::update::Found::Available(v, url))) => {
-                        if told.as_ref() != Some(&v) {
+                        if manual || told.as_ref() != Some(&v) {
                             told = Some(v.clone());
-                            let _ = tx.send(crate::update::Found::Available(v, url));
-                            ctx.request_repaint();
+                            let _ = tx.send(UpdateNews::Found(crate::update::Found::Available(v, url)));
                         }
+                    }
+                    Ok(None) if manual => {
+                        let _ = tx.send(UpdateNews::Current);
                     }
                     Ok(None) => {}
                     Err(e) => {
                         eprintln!("güncelleme denetlenemedi: {e}");
                         last_check.store(now.saturating_sub(UPDATE_INTERVAL - UPDATE_RETRY), Relaxed);
+                        if manual {
+                            let _ = tx.send(UpdateNews::Failed(e));
+                        }
                     }
                 }
+                ctx.request_repaint();
             }
             // Bütün kopyalar aynı dakikada sormasın diye 10 dakikaya kadar rastgele kaydır
             use std::hash::BuildHasher;
             let jitter = std::collections::hash_map::RandomState::new().hash_one(now) % 600;
             let next = if enabled.load(Relaxed) { (last_check.load(Relaxed) + UPDATE_INTERVAL).saturating_sub(unix_now()).min(UPDATE_INTERVAL) } else { UPDATE_INTERVAL };
-            if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) = wake_rx.recv_timeout(Duration::from_secs(next + jitter)) {
-                return;
-            }
+            manual = match wake_rx.recv_timeout(Duration::from_secs(next + jitter)) {
+                Ok(m) => m,
+                Err(RecvTimeoutError::Timeout) => false,
+                Err(RecvTimeoutError::Disconnected) => return,
+            };
         }
     });
     (rx, wake_tx)
@@ -352,9 +383,13 @@ pub struct App {
     default_fm: Option<bool>,
     /// Arka plandaki denetleyici okur; kapatılınca bir sonraki denetim atlanır
     auto_update: Arc<AtomicBool>,
-    update_rx: std::sync::mpsc::Receiver<crate::update::Found>,
-    /// Güncelleme denetleyicisini uyandırır
-    update_wake: std::sync::mpsc::Sender<()>,
+    update_rx: std::sync::mpsc::Receiver<UpdateNews>,
+    /// Güncelleme denetleyicisini uyandırır; `true` menüden istenen denetimdir
+    update_wake: std::sync::mpsc::Sender<bool>,
+    /// Bu süreçte denetleyici çalışıyor; Windows'ta yalnızca sonraki açılışları karşılayan süreçte
+    checks_updates: bool,
+    /// Menüden istenen denetim sürüyor
+    update_checking: bool,
     last_update_check: Arc<AtomicU64>,
     /// Yeni sürüm kuruldu: pencere kapanınca gizlenmek yerine yeni sürüm başlatılır
     update_installed: bool,
@@ -1163,7 +1198,8 @@ impl App {
         let auto_update = Arc::new(AtomicBool::new(cfg.auto_update));
         // Aynı anda tek süreç güncellesin: sonraki açılışları karşılayan süreç
         let last_update_check = Arc::new(AtomicU64::new(cfg.last_update_check));
-        let (update_rx, update_wake) = spawn_update_checker((resident || !cfg!(windows)).then(|| auto_update.clone()), last_update_check.clone(), ctx.clone());
+        let checks_updates = (resident || !cfg!(windows)) && crate::update::enabled();
+        let (update_rx, update_wake) = spawn_update_checker(checks_updates.then(|| auto_update.clone()), last_update_check.clone(), ctx.clone());
         // Yalnızca etkin sekme hemen yüklenir; diğerleri ilk açıldıklarında
         let tabs = paths.into_iter().enumerate().map(|(i, p)| if i == active { Tab::new(p, &ctx) } else { Tab::new_lazy(p) }).collect();
 
@@ -1190,6 +1226,8 @@ impl App {
             auto_update,
             update_rx,
             update_wake,
+            checks_updates,
+            update_checking: false,
             last_update_check,
             update_installed: false,
             start_hidden: hidden,
@@ -1247,14 +1285,21 @@ impl App {
     }
 
     fn poll_update(&mut self) {
-        while let Ok(found) = self.update_rx.try_recv() {
-            match found {
-                crate::update::Found::Installed(v) => {
+        while let Ok(news) = self.update_rx.try_recv() {
+            self.update_checking = false;
+            match news {
+                UpdateNews::Found(crate::update::Found::Installed(v)) => {
                     self.update_installed = true;
                     self.toast(crate::i18n::tf("Swift Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.", &[&v]), false);
                 }
-                crate::update::Found::Available(v, url) => {
+                UpdateNews::Found(crate::update::Found::Available(v, url)) => {
                     self.toast(crate::i18n::tf("Yeni sürüm var: {}. İndirmek için: {}", &[&v, &url]), false);
+                }
+                UpdateNews::Current => {
+                    self.toast(crate::i18n::tf("Swift Explorer güncel: {}", &[&env!("CARGO_PKG_VERSION")]), false);
+                }
+                UpdateNews::Failed(e) => {
+                    self.toast(crate::i18n::tf("Güncelleme denetlenemedi: {}", &[&e]), true);
                 }
             }
         }
@@ -1392,7 +1437,7 @@ impl App {
             }
         }
         self.refresh_drives();
-        let _ = self.update_wake.send(());
+        let _ = self.update_wake.send(false);
     }
 
     fn toast(&mut self, msg: impl Into<String>, error: bool) {
@@ -2802,6 +2847,12 @@ impl App {
                     let mut on = self.auto_update.load(Relaxed);
                     if ui.checkbox(&mut on, crate::i18n::t("Güncellemeleri otomatik yükle")).changed() {
                         self.auto_update.store(on, Relaxed);
+                    }
+                }
+                if self.checks_updates && !self.update_installed {
+                    let label = if self.update_checking { "Güncellemeler denetleniyor…" } else { "Güncellemeleri şimdi denetle" };
+                    if ui.add_enabled(!self.update_checking, egui::Button::new(crate::i18n::t(label))).clicked() {
+                        self.update_checking = self.update_wake.send(true).is_ok();
                     }
                 }
                 ui.separator();
