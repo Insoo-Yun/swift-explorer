@@ -34,6 +34,7 @@ Linux 的安装方法见[英文 README](README.md#download)。
 - 在地址栏输入 `cmd`、`powershell`、`pwsh` 或 `wt`，会在当前文件夹打开对应的终端。
 - 复制、剪切、粘贴和拖放可与资源管理器及桌面双向互通。
 - Shift + 右键打开完整的 Windows 右键菜单，7-Zip、WinRAR 和“发送到”都在其中。
+- 右键菜单还会列出 Windows 菜单中的应用，例如 7-Zip、WinRAR、Notepad++ 和“发送到”。底部的“编辑此列表”可选择显示哪些项目。
 - Ctrl+Z 可撤消重命名、移动、复制以及删除到回收站。
 - “查看 > 主题”中除了系统、浅色、深色，还有 Catppuccin、Gruvbox、Everforest、Nord、Dracula、Tokyo Night、Rosé Pine 和 Solarized。
 - 复制和移动要等文件真正写入磁盘后才算完成，相当于在终端里执行 `sync`。进度条消失后就可以拔出 U 盘。移动到其他驱动器时，原文件也是在此之后才删除。

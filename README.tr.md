@@ -46,6 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır, `terminal` ise Windows Terminal'i açar. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
 - Shift + sağ tık Windows'un tam sağ tık menüsünü açar; 7-Zip, WinRAR ve Gönder orada.
+- Sağ tık menüsü Windows menüsündeki uygulamaları da listeler: 7-Zip, WinRAR, Notepad++, Gönder gibi. En alttaki "Bu listeyi düzenle" hangilerinin görüneceğini seçer.
 - Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.
 - Görünüm > Tema altında Sistem, Açık ve Koyu'nun yanında Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine ve Solarized var.
 - Kopyalama ve taşıma, dosyalar diske yazılmadan bitmiş sayılmaz. Terminalde `sync` çalıştırmak gibi. İlerleme çubuğu kaybolunca USB bellek çıkarılabilir. Başka sürücüye taşırken asıl dosyalar ancak bundan sonra silinir.
