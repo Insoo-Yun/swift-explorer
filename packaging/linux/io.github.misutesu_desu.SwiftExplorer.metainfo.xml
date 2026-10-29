@@ -41,6 +41,19 @@
     <control>pointing</control>
   </supports>
   <releases>
+    <release version="0.8.0" date="2026-10-29">
+      <description>
+        <p>A command palette, split view, batch rename and zip archives.</p>
+        <ul>
+          <li>Ctrl+Shift+P opens a command palette that also lists pinned, known and recent folders.</li>
+          <li>Ctrl+Shift+S shows two folders side by side. F6 switches between them.</li>
+          <li>F2 with several items selected opens batch rename with a preview and conflict checks.</li>
+          <li>Zip files can be extracted and created from the right-click menu.</li>
+          <li>Search results can be narrowed to one file extension, the details pane lists a folder's contents and the status bar shows the git branch.</li>
+          <li>The default file manager setting keeps working after the app is moved or updated, and --unregister undoes it before uninstalling.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-10-19">
       <description>
         <p>The app can be the default file manager, and search works on This PC.</p>
