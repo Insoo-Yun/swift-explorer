@@ -94,6 +94,8 @@ fn load_config() -> Config {
 }
 
 const UPDATE_INTERVAL: u64 = 3600;
+/// Ağ yoksa ya da sunucu yanıt vermediyse bir saat beklemeden yeniden dene
+const UPDATE_RETRY: u64 = 600;
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
@@ -136,7 +138,10 @@ fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, last_check: Arc<Atomic
                         }
                     }
                     Ok(None) => {}
-                    Err(e) => eprintln!("güncelleme denetlenemedi: {e}"),
+                    Err(e) => {
+                        eprintln!("güncelleme denetlenemedi: {e}");
+                        last_check.store(now.saturating_sub(UPDATE_INTERVAL - UPDATE_RETRY), Relaxed);
+                    }
                 }
             }
             // Bütün kopyalar aynı dakikada sormasın diye 10 dakikaya kadar rastgele kaydır
