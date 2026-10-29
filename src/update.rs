@@ -51,6 +51,11 @@ fn is_dev_build(exe: &Path) -> bool {
     cfg!(debug_assertions) || exe.ancestors().any(|a| a.file_name().is_some_and(|n| n == "target"))
 }
 
+/// Geliştirme derlemesi kayıt defterindeki kurulu kopyanın kaydını da devralmasın
+pub fn dev_build() -> bool {
+    std::env::current_exe().is_ok_and(|e| is_dev_build(&e))
+}
+
 /// Scoop kurduğu klasöre bu iki dosyayı koyar; sürümü kendisi takip eder
 fn scoop_install(exe: &Path) -> bool {
     exe.parent().is_some_and(|d| d.join("install.json").exists() && d.join("manifest.json").exists())

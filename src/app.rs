@@ -1197,6 +1197,9 @@ impl App {
         let (paths, active) = startup_tabs(&cfg, start);
         let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
         let resident = win::serve(ctx.clone());
+        if resident && !crate::update::dev_build() {
+            std::thread::spawn(win::refresh_default_file_manager);
+        }
         let auto_update = Arc::new(AtomicBool::new(cfg.auto_update));
         // Aynı anda tek süreç güncellesin: sonraki açılışları karşılayan süreç
         let last_update_check = Arc::new(AtomicU64::new(cfg.last_update_check));
@@ -2892,6 +2895,10 @@ impl App {
                             self.type_names.clear();
                             self.refresh_drives();
                             self.mark_views_dirty();
+                            // Klasörlerin sağ tık menüsündeki "Swift Explorer ile aç" yeni dilde görünsün
+                            if !crate::update::dev_build() {
+                                std::thread::spawn(win::refresh_default_file_manager);
+                            }
                         }
                     }
                 });

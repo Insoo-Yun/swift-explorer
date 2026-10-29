@@ -323,3 +323,6 @@ pub fn set_default_file_manager(on: bool, previous: Option<&str>) -> Option<Stri
         None
     }
 }
+
+/// Linux'ta kayıt `.desktop` kimliğiyle yapılır, exe yolu değişse de geçerli kalır
+pub fn refresh_default_file_manager() {}

@@ -440,6 +440,31 @@ pub fn is_default_file_manager() -> bool {
     SHELL_KEYS.iter().all(|k| reg_get(k, None).as_deref() == Some(VERB) && reg_get(&format!(r"{k}\{VERB}\command"), None).is_some_and(|c| OsStr::new(&c) == cmd))
 }
 
+/// `"C:\...\SwiftExplorer.exe" "%1"` komutundaki exe
+fn command_exe(cmd: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(cmd.strip_prefix('"')?.split('"').next()?))
+}
+
+/// Uygulama varsayılan gezginse kaydı bu exe'ye ve geçerli dile göre yeniler: exe taşındıysa
+/// ya da yeni sürümde menü adı değiştiyse klasörler yine bu uygulamada açılır. Kayıt hâlâ
+/// duran başka bir kopyayı gösteriyorsa o kopya seçilmiştir, dokunmaz.
+pub fn refresh_default_file_manager() {
+    let Some(cmd) = reg_get(&format!(r"{}\{VERB}\command", SHELL_KEYS[0]), None) else { return };
+    // Varsayılanı sonradan başka bir program aldıysa geri alma
+    if SHELL_KEYS.iter().all(|k| reg_get(k, None).as_deref() != Some(VERB)) {
+        return;
+    }
+    let (Some(open), Some(bare)) = (launch_command(" \"%1\""), launch_command("")) else { return };
+    let label = crate::i18n::t("Swift Explorer ile aç");
+    let fresh = is_default_file_manager()
+        && SHELL_KEYS.iter().all(|k| reg_get(&format!(r"{k}\{VERB}"), None).as_deref() == Some(label))
+        && reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None).is_some_and(|c| OsStr::new(&c) == bare);
+    if fresh || OsStr::new(&cmd) != open && command_exe(&cmd).is_some_and(|e| e.exists()) {
+        return;
+    }
+    set_default_file_manager(true, None);
+}
+
 /// Yalnızca bu kullanıcı için (HKCU) ayarlar; geri alınca yazdığı her şeyi siler.
 /// `previous` ve dönüş değeri Linux içindir; burada eski değer silinerek geri gelir.
 pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<String> {
@@ -469,4 +494,17 @@ pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<Str
     }
     unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED as i32, SHCNF_IDLIST, std::ptr::null(), std::ptr::null()) };
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_exe;
+    use std::path::PathBuf;
+
+    #[test]
+    fn exe_of_a_registered_command() {
+        assert_eq!(command_exe(r#""C:\Apps\Swift Explorer\SwiftExplorer.exe" "%1""#), Some(PathBuf::from(r"C:\Apps\Swift Explorer\SwiftExplorer.exe")));
+        assert_eq!(command_exe(r#""C:\SwiftExplorer.exe""#), Some(PathBuf::from(r"C:\SwiftExplorer.exe")));
+        assert_eq!(command_exe(r"C:\SwiftExplorer.exe %1"), None);
+    }
 }
