@@ -201,6 +201,15 @@ fn startup_tabs(cfg: &Config, start: Option<PathBuf>) -> (Vec<PathBuf>, usize) {
     (paths, active)
 }
 
+/// Uygulama silinmeden önce kaldırma betiği çağırır: klasörler yine eski uygulamada açılır,
+/// oturum açılınca başlatma kaydı silinir. Pencere açmaz.
+pub fn unregister() {
+    if win::is_default_file_manager() {
+        win::set_default_file_manager(false, load_config().previous_folder_app.as_deref());
+    }
+    win::set_autostart(false);
+}
+
 /// Pencere ve GPU sürücüsü hazırlanırken (~200 ms) ilk ekranı hazırlar: açılış klasörünü
 /// okur, ikon iş parçacıklarını başlatır ve ilk görünecek öğelerin ikon/küçük resimlerini
 /// arayüzün isteyeceği boyut ve türde önceden üretir.

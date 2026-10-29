@@ -27,8 +27,15 @@ pub const APP_NAME: &str = "Swift Explorer";
 /// Wayland/X11 pencere kimliği; `.desktop` dosyasının adıyla aynı olmalı ki masaüstü ikonu ve adı eşleştirsin
 pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
+/// Kaldırma betikleri için: varsayılan dosya yöneticisi ve otomatik başlatma kaydını geri alır
+const UNREGISTER_ARG: &str = "--unregister";
+
 fn main() -> eframe::Result<()> {
     let arg = std::env::args().nth(1);
+    if arg.as_deref() == Some(UNREGISTER_ARG) {
+        app::unregister();
+        return Ok(());
+    }
     let after_update = arg.as_deref() == Some(update::AFTER_UPDATE_ARG);
     let restart = arg.as_deref() == Some(update::RESTART_ARG);
     let hidden = after_update || arg.as_deref() == Some(win::BACKGROUND_ARG);
