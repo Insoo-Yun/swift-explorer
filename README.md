@@ -36,15 +36,23 @@ Releases after 0.2.0 also include `swift-explorer.flatpak`, which installs with 
 - Same layout as Explorer: tabs in the title bar, address bar with breadcrumbs, command bar, navigation pane, Home and This PC pages.
 - Uses Windows' own icons, thumbnails and file type names.
 - Every Explorer shortcut works the same way. Press F1 for the full list.
+- Ctrl+Shift+P opens a command palette: type part of a command's name, like `hidden` or `large icons`, and press Enter.
+- Ctrl+Shift+S shows two folders side by side. F6 switches between them, and dragging between them copies or moves files.
+- Pressing F2 with several items selected opens batch rename: find and replace, a name pattern with `{name}`, `{n}` and `{date}`, and upper or lower case, with a preview of every new name.
+- Zip files can be extracted and created from the right-click menu.
+- Search results can be narrowed to one file extension with the buttons above the list.
+- The details pane lists what's inside a selected folder, and the status bar shows the git branch when the folder is in a git repository.
 - Typing in the search box filters the current folder instantly. Press Enter to search all subfolders; `*` and `?` wildcards work.
 - Typing `cmd`, `powershell`, `pwsh` or `wt` in the address bar opens that terminal in the current folder, and `terminal` opens Windows Terminal. On Linux, `terminal` opens your default terminal, and a terminal's name (`konsole`, `kitty`…) opens that one.
 - Copy, cut, paste and drag and drop work in both directions with Explorer and the desktop.
 - Shift + right-click opens the full Windows context menu, so 7-Zip, WinRAR and Send to are there.
+- The right-click menu also lists the apps from the Windows menu, such as 7-Zip, WinRAR, Notepad++ and Send to. "Edit this list" at the bottom chooses which ones appear.
 - Ctrl+Z undoes renames, moves, copies and deletes to the Recycle Bin.
 - Besides System, Light and Dark, View > Theme has Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine and Solarized.
 - A copy or move counts as done only after the files are written to the disk, like running `sync` in a terminal. Once the progress bar is gone, a USB stick can be pulled out. When moving to another drive, the originals are deleted only after that.
 - On Windows, closing the window keeps the app waiting in the background, so opening it again shows the window right away instead of waiting for the graphics driver to start. With View > Start in the background when signing in, the first launch after a reboot is quick too.
-- On Windows the app updates itself: a new release is downloaded from GitHub, checked against its SHA-256 and takes over once the window is closed. Scoop installs are left to `scoop update`. View > Install updates automatically turns this off.
+- On Windows the app updates itself: a new release is downloaded from GitHub, checked against its SHA-256 and takes over once the window is closed, or right away with View > Restart to switch to the new version. If the new version fails to start twice, the previous one comes back. View > Check for updates now checks without waiting for the hourly check. Scoop installs are left to `scoop update`. View > Install updates automatically turns this off.
+- View > Use as the default file manager opens folders, drives and Win+E in Swift Explorer. On Linux it sets the app for `inode/directory`, and turning it off gives folders back to the previous app. The setting keeps working after updates. If the exe is moved, the next launch points Windows at the new location. Before deleting the app, turn the option off or run `SwiftExplorer.exe --unregister`.
 - When a file with the same name already exists, it asks whether to replace, skip or keep both.
 - Folders update live when files change on disk.
 - Downloads is grouped by date modified (Today, Yesterday, Last week…), like in Explorer. Other folders can be grouped from Sort > Group by.

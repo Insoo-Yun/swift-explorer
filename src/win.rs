@@ -27,6 +27,11 @@ pub struct DriveInfo {
     pub total: u64,
 }
 
+/// Takılı sürücü harflerinin bit maskesi. USB takılıp çıkarılınca değişir, ucuzdur.
+pub fn drive_mask() -> u64 {
+    unsafe { GetLogicalDrives() as u64 }
+}
+
 pub fn drives() -> Vec<DriveInfo> {
     let mask = unsafe { GetLogicalDrives() };
     let mut out = Vec::new();
@@ -371,10 +376,135 @@ pub fn set_autostart(on: bool) {
         unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
         return;
     }
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = crate::update::stable_exe() else { return };
     let mut cmd = OsString::from("\"");
     cmd.push(exe.as_os_str());
     cmd.push(format!("\" {BACKGROUND_ARG}"));
     let data = wide(&cmd);
     unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) };
+}
+
+// ---------- Varsayılan dosya gezgini: klasörler, sürücüler ve Win+E bu uygulamada açılır
+
+const VERB: &str = "SwiftExplorer";
+/// Klasör ve sürücülerin varsayılan eylemi bu anahtarların (Default) değeridir
+const SHELL_KEYS: [&str; 2] = [r"Software\Classes\Directory\shell", r"Software\Classes\Drive\shell"];
+/// Win+E'nin açtığı "Bu bilgisayar" penceresi
+const WIN_E_KEY: &str = r"Software\Classes\CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
+
+fn reg_get(key: &str, value: Option<&str>) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
+    let key = wide(OsStr::new(key));
+    let value = value.map(|v| wide(OsStr::new(v)));
+    let value_ptr = value.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let mut buf = [0u16; 1024];
+    let mut len = (buf.len() * 2) as u32;
+    let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value_ptr, RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len) };
+    (r == 0).then(|| String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]))
+}
+
+fn reg_set(key: &str, value: Option<&str>, data: &OsStr) -> bool {
+    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    let key = wide(OsStr::new(key));
+    let value = value.map(|v| wide(OsStr::new(v)));
+    let value_ptr = value.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+    let data = wide(data);
+    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value_ptr, REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) == 0 }
+}
+
+fn reg_delete_value(key: &str) {
+    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, HKEY_CURRENT_USER};
+    let key = wide(OsStr::new(key));
+    unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), std::ptr::null()) };
+}
+
+fn reg_delete_tree(key: &str) {
+    use windows_sys::Win32::System::Registry::{RegDeleteTreeW, HKEY_CURRENT_USER};
+    let key = wide(OsStr::new(key));
+    unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, key.as_ptr()) };
+}
+
+/// `"C:\...\SwiftExplorer.exe" "%1"`; argümansız hali Win+E içindir
+fn launch_command(arg: &str) -> Option<OsString> {
+    let exe = crate::update::stable_exe().ok()?;
+    let mut cmd = OsString::from("\"");
+    cmd.push(exe.as_os_str());
+    cmd.push("\"");
+    cmd.push(arg);
+    Some(cmd)
+}
+
+/// Kayıtlı komut bu exe'yi gösteriyor mu (exe taşındıysa kayıt eskimiştir)
+pub fn is_default_file_manager() -> bool {
+    let Some(cmd) = launch_command(" \"%1\"") else { return false };
+    SHELL_KEYS.iter().all(|k| reg_get(k, None).as_deref() == Some(VERB) && reg_get(&format!(r"{k}\{VERB}\command"), None).is_some_and(|c| OsStr::new(&c) == cmd))
+}
+
+/// `"C:\...\SwiftExplorer.exe" "%1"` komutundaki exe
+fn command_exe(cmd: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(cmd.strip_prefix('"')?.split('"').next()?))
+}
+
+/// Uygulama varsayılan gezginse kaydı bu exe'ye ve geçerli dile göre yeniler: exe taşındıysa
+/// ya da yeni sürümde menü adı değiştiyse klasörler yine bu uygulamada açılır. Kayıt hâlâ
+/// duran başka bir kopyayı gösteriyorsa o kopya seçilmiştir, dokunmaz.
+pub fn refresh_default_file_manager() {
+    let Some(cmd) = reg_get(&format!(r"{}\{VERB}\command", SHELL_KEYS[0]), None) else { return };
+    // Varsayılanı sonradan başka bir program aldıysa geri alma
+    if SHELL_KEYS.iter().all(|k| reg_get(k, None).as_deref() != Some(VERB)) {
+        return;
+    }
+    let (Some(open), Some(bare)) = (launch_command(" \"%1\""), launch_command("")) else { return };
+    let label = crate::i18n::t("Swift Explorer ile aç");
+    let fresh = is_default_file_manager()
+        && SHELL_KEYS.iter().all(|k| reg_get(&format!(r"{k}\{VERB}"), None).as_deref() == Some(label))
+        && reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None).is_some_and(|c| OsStr::new(&c) == bare);
+    if fresh || OsStr::new(&cmd) != open && command_exe(&cmd).is_some_and(|e| e.exists()) {
+        return;
+    }
+    set_default_file_manager(true, None);
+}
+
+/// Yalnızca bu kullanıcı için (HKCU) ayarlar; geri alınca yazdığı her şeyi siler.
+/// `previous` ve dönüş değeri Linux içindir; burada eski değer silinerek geri gelir.
+pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<String> {
+    use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+    if on {
+        let (Some(open), Some(bare)) = (launch_command(" \"%1\""), launch_command("")) else { return None };
+        for k in SHELL_KEYS {
+            reg_set(&format!(r"{k}\{VERB}"), None, OsStr::new(crate::i18n::t("Swift Explorer ile aç")));
+            reg_set(&format!(r"{k}\{VERB}\command"), None, &open);
+            reg_set(k, None, OsStr::new(VERB));
+        }
+        // Win+E: DelegateExecute boş olunca Explorer komutu çalıştırır
+        reg_set(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None, &bare);
+        reg_set(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), Some("DelegateExecute"), OsStr::new(""));
+    } else {
+        for k in SHELL_KEYS {
+            if reg_get(k, None).as_deref() == Some(VERB) {
+                reg_delete_value(k);
+            }
+            reg_delete_tree(&format!(r"{k}\{VERB}"));
+        }
+        // Başka bir program yazdıysa dokunma
+        let ours = reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None).is_some_and(|c| c.to_lowercase().contains("swiftexplorer") || c.to_lowercase().contains("swift-explorer"));
+        if ours {
+            reg_delete_tree(WIN_E_KEY);
+        }
+    }
+    unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED as i32, SHCNF_IDLIST, std::ptr::null(), std::ptr::null()) };
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_exe;
+    use std::path::PathBuf;
+
+    #[test]
+    fn exe_of_a_registered_command() {
+        assert_eq!(command_exe(r#""C:\Apps\Swift Explorer\SwiftExplorer.exe" "%1""#), Some(PathBuf::from(r"C:\Apps\Swift Explorer\SwiftExplorer.exe")));
+        assert_eq!(command_exe(r#""C:\SwiftExplorer.exe""#), Some(PathBuf::from(r"C:\SwiftExplorer.exe")));
+        assert_eq!(command_exe(r"C:\SwiftExplorer.exe %1"), None);
+    }
 }

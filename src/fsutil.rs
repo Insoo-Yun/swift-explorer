@@ -391,13 +391,13 @@ pub struct SearchHandle {
     pub scanned: Arc<AtomicU64>,
 }
 
-pub fn spawn_search(root: PathBuf, pattern: Pattern, ctx: egui::Context) -> SearchHandle {
+pub fn spawn_search(roots: Vec<PathBuf>, pattern: Pattern, ctx: egui::Context) -> SearchHandle {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let scanned = Arc::new(AtomicU64::new(0));
     let (c, s) = (cancel.clone(), scanned.clone());
     thread::spawn(move || {
-        search_dir(&root, &pattern, &tx, &c, &s);
+        roots.par_iter().for_each(|r| search_dir(r, &pattern, &tx, &c, &s));
         let _ = tx.send(SearchMsg::Done);
         ctx.request_repaint();
     });
@@ -565,6 +565,8 @@ pub enum JobKind {
     Delete,
     Size,
     Restore,
+    /// Zip açma ya da oluşturma; tek çifti oluşan klasör ya da dosyadır
+    Archive,
 }
 
 /// Hedefte aynı adda öğe varsa ne yapılacağı
@@ -602,7 +604,7 @@ pub fn jobs_running() -> bool {
 }
 
 impl Job {
-    fn new(label: String, kind: JobKind) -> Arc<Job> {
+    pub(crate) fn new(label: String, kind: JobKind) -> Arc<Job> {
         RUNNING.fetch_add(1, Relaxed);
         Arc::new(Job {
             label,
@@ -621,11 +623,11 @@ impl Job {
             pairs: Mutex::new(Vec::new()),
         })
     }
-    fn finish(&self) {
+    pub(crate) fn finish(&self) {
         self.finished.store(true, Relaxed);
         RUNNING.fetch_sub(1, Relaxed);
     }
-    fn err(&self, e: String) {
+    pub(crate) fn err(&self, e: String) {
         self.errors.lock().unwrap().push(e);
     }
     fn interrupted(&self) -> io::Result<()> {
@@ -962,6 +964,25 @@ pub enum PreviewData {
     Text(String),
     Binary,
     Error(String),
+    /// Klasörün ilk öğeleri ve toplam öğe sayısı
+    Folder(Vec<Entry>, usize),
+}
+
+/// Klasör önizlemesi: önce klasörler, ada göre; en fazla `limit` öğe
+pub fn read_folder_preview(path: &Path, show_hidden: bool, limit: usize) -> PreviewData {
+    let rd = match fs::read_dir(path) {
+        Ok(rd) => rd,
+        Err(e) => return PreviewData::Error(e.to_string()),
+    };
+    let mut items: Vec<Entry> = rd
+        .flatten()
+        .filter_map(|d| Some(Entry::from_metadata(d.path(), &d.metadata().ok()?)))
+        .filter(|e| show_hidden || !e.hidden)
+        .collect();
+    let total = items.len();
+    items.sort_by(|a, b| compare(a, b, SortKey::Name, true));
+    items.truncate(limit);
+    PreviewData::Folder(items, total)
 }
 
 pub fn read_preview(path: &Path) -> PreviewData {
@@ -984,6 +1005,39 @@ pub fn read_preview(path: &Path) -> PreviewData {
         return PreviewData::Binary;
     }
     PreviewData::Text(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// En çok geçen dosya uzantıları ve sayıları, çoktan aza; klasörler sayılmaz
+pub fn top_extensions(entries: &[Entry], n: usize) -> Vec<(String, usize)> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for e in entries.iter().filter(|e| !e.is_dir && !e.ext.is_empty()) {
+        *counts.entry(&e.ext).or_default() += 1;
+    }
+    let mut v: Vec<(String, usize)> = counts.into_iter().map(|(k, c)| (k.to_string(), c)).collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v.truncate(n);
+    v
+}
+
+// ---------------------------------------------------------------- git
+
+/// Klasör bir git deposunun içindeyse etkin dalın adı; dal yoksa commit'in kısa hali
+pub fn git_branch(dir: &Path) -> Option<String> {
+    let dot = dir.ancestors().map(|d| d.join(".git")).find(|g| g.exists())?;
+    // Alt modül ve worktree'lerde .git bir dosyadır: "gitdir: <yol>"
+    let git_dir = if dot.is_file() {
+        let s = fs::read_to_string(&dot).ok()?;
+        let p = PathBuf::from(s.strip_prefix("gitdir:")?.trim());
+        if p.is_absolute() { p } else { dot.parent()?.join(p) }
+    } else {
+        dot
+    };
+    let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    match head.strip_prefix("ref: ") {
+        Some(r) => Some(r.strip_prefix("refs/heads/").unwrap_or(r).to_string()),
+        None => Some(head.get(..7)?.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -1130,5 +1184,47 @@ mod tests {
             fs::set_permissions(f, perm).unwrap();
         }
         fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn git_branch_reads_head() {
+        let root = std::env::temp_dir().join(format!("swift-explorer-git-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("repo/.git")).unwrap();
+        fs::create_dir_all(root.join("repo/src/deep")).unwrap();
+        fs::write(root.join("repo/.git/HEAD"), "ref: refs/heads/feature/x\n").unwrap();
+        assert_eq!(git_branch(&root.join("repo/src/deep")).as_deref(), Some("feature/x"));
+        fs::write(root.join("repo/.git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+        assert_eq!(git_branch(&root.join("repo")).as_deref(), Some("0123456"));
+        // Worktree: .git dosyası başka bir klasörü gösterir
+        fs::create_dir_all(root.join("wt-meta")).unwrap();
+        fs::write(root.join("wt-meta/HEAD"), "ref: refs/heads/side\n").unwrap();
+        fs::create_dir_all(root.join("wt")).unwrap();
+        fs::write(root.join("wt/.git"), "gitdir: ../wt-meta\n").unwrap();
+        assert_eq!(git_branch(&root.join("wt")).as_deref(), Some("side"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn folder_preview_lists_folders_first_and_counts_all() {
+        let root = std::env::temp_dir().join(format!("swift-explorer-folder-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("z klasör")).unwrap();
+        for n in ["b.txt", "a10.txt", "a2.txt"] {
+            fs::write(root.join(n), b"x").unwrap();
+        }
+        let PreviewData::Folder(items, total) = read_folder_preview(&root, true, 3) else { panic!() };
+        assert_eq!(total, 4);
+        let names: Vec<&str> = items.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["z klasör", "a2.txt", "a10.txt"]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+    #[test]
+    fn top_extensions_counts_files_only() {
+        let e = |name: &str, is_dir: bool| {
+            let path = PathBuf::from(name);
+            let ext = if is_dir { String::new() } else { path.extension().map(|x| x.to_string_lossy().to_lowercase()).unwrap_or_default() };
+            Entry { name: name.into(), name_lower: name.to_lowercase(), path, is_dir, size: 0, modified: None, created: None, hidden: false, ext, plain_dir: false }
+        };
+        let list = [e("a.pdf", false), e("b.PDF", false), e("c.txt", false), e("d.zip", false), e("klasor.pdf", true), e("README", false)];
+        assert_eq!(top_extensions(&list, 2), [("pdf".to_string(), 2), ("txt".to_string(), 1)]);
     }
 }

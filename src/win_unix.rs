@@ -48,6 +48,14 @@ pub fn mount_roots() -> Vec<PathBuf> {
     v
 }
 
+/// Bağlama noktalarının özeti. Disk takılıp çıkarılınca değişir.
+pub fn drive_mask() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    mount_roots().hash(&mut h);
+    h.finish()
+}
+
 pub fn drives() -> Vec<DriveInfo> {
     mount_roots()
         .into_iter()
@@ -292,3 +300,29 @@ pub fn autostart() -> bool {
 }
 
 pub fn set_autostart(_on: bool) {}
+
+// ---------- Varsayılan dosya yöneticisi: klasörler bu uygulamada açılır
+
+const DESKTOP_ID: &str = "io.github.misutesu_desu.SwiftExplorer.desktop";
+
+pub fn is_default_file_manager() -> bool {
+    default_app_id("inode/directory").as_deref() == Some(DESKTOP_ID)
+}
+
+/// Açarken önceki varsayılanı döndürür; kapatırken `previous` geri yüklenir
+pub fn set_default_file_manager(on: bool, previous: Option<&str>) -> Option<String> {
+    let set = |id: &str| host_command("xdg-mime").args(["default", id, "inode/directory"]).status().is_ok_and(|s| s.success());
+    if on {
+        let before = default_app_id("inode/directory").filter(|id| id != DESKTOP_ID);
+        set(DESKTOP_ID);
+        before
+    } else {
+        if let Some(p) = previous.filter(|p| *p != DESKTOP_ID) {
+            set(p);
+        }
+        None
+    }
+}
+
+/// Linux'ta kayıt `.desktop` kimliğiyle yapılır, exe yolu değişse de geçerli kalır
+pub fn refresh_default_file_manager() {}

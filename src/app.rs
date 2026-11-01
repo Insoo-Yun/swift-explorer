@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,12 @@ struct Config {
     /// Pencere kapanınca süreç gizlenip bekler, sonraki açılış anında olur (Windows)
     background: bool,
     auto_update: bool,
+    /// Son güncelleme denetimi, Unix saniyesi. Uygulamayı sık açıp kapamak istek yağdırmasın.
+    last_update_check: u64,
+    /// Varsayılan dosya yöneticisi yapılmadan önceki uygulama (Linux'ta geri yüklemek için)
+    previous_folder_app: Option<String>,
+    /// Sağ tık menüsünde gösterilmeyen Windows menü öğeleri
+    hidden_shell_items: Vec<String>,
 }
 
 impl Default for Config {
@@ -68,6 +74,9 @@ impl Default for Config {
             grouped: dirs::download_dir().into_iter().collect(),
             background: true,
             auto_update: true,
+            last_update_check: 0,
+            previous_folder_app: None,
+            hidden_shell_items: vec![],
         }
     }
 }
@@ -84,43 +93,98 @@ fn load_config() -> Config {
         .unwrap_or_default()
 }
 
-/// Açılıştan biraz sonra ve 6 saatte bir yeni sürümü denetler. Pencere gizliyken de çalışır:
-/// yeni sürüm kurulunca gizli süreç onu arka planda başlatıp çıkar. `enabled` yoksa denetlemez.
-fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, ctx: egui::Context) -> std::sync::mpsc::Receiver<crate::update::Found> {
+const UPDATE_INTERVAL: u64 = 3600;
+/// Ağ yoksa ya da sunucu yanıt vermediyse bir saat beklemeden yeniden dene
+const UPDATE_RETRY: u64 = 600;
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Güncelleme denetleyicisinin arayüze bildirdikleri
+enum UpdateNews {
+    Found(crate::update::Found),
+    /// Menüden denetlendi, yeni sürüm yok
+    Current,
+    /// Menüden denetlendi, sunucuya ulaşılamadı
+    Failed(String),
+}
+
+/// Son denetimden bu yana bir saat geçtiyse yeni sürümü denetler: açılıştan biraz sonra,
+/// saatte bir ve dönen kanala sinyal gelince, yani pencere yeniden açılınca. Pencere gizliyken
+/// de çalışır: yeni sürüm kurulunca gizli süreç onu arka planda başlatıp çıkar. `enabled` yoksa denetlemez.
+/// Kanala `true` gelirse kullanıcı menüden istemiştir: süreye ve otomatik güncelleme ayarına bakmadan denetler.
+fn spawn_update_checker(enabled: Option<Arc<AtomicBool>>, last_check: Arc<AtomicU64>, ctx: egui::Context) -> (std::sync::mpsc::Receiver<UpdateNews>, std::sync::mpsc::Sender<bool>) {
+    use std::sync::mpsc::RecvTimeoutError;
     let (tx, rx) = std::sync::mpsc::channel();
-    let Some(enabled) = enabled.filter(|_| crate::update::enabled()) else { return rx };
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel::<bool>();
+    let Some(enabled) = enabled.filter(|_| crate::update::enabled()) else { return (rx, wake_tx) };
     std::thread::spawn(move || {
         crate::update::remove_old();
-        // Açılışla yarışmasın
-        std::thread::sleep(Duration::from_secs(15));
+        // Açılışla yarışmasın; menüden istenirse beklemeden denetle
+        let mut manual = false;
+        let started = Instant::now();
+        while let Some(left) = Duration::from_secs(15).checked_sub(started.elapsed()) {
+            match wake_rx.recv_timeout(left) {
+                Ok(true) => {
+                    manual = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
         let mut told = None;
         loop {
-            if enabled.load(Relaxed) {
+            let now = unix_now();
+            let last = last_check.load(Relaxed);
+            // Saat geri alındıysa da denetle
+            let due = now < last || now - last >= UPDATE_INTERVAL;
+            if manual || enabled.load(Relaxed) && due {
+                last_check.store(now, Relaxed);
                 match crate::update::check() {
                     Ok(Some(crate::update::Found::Installed(v))) => {
                         if !fsutil::jobs_running() && win::take_parked() {
                             crate::update::launch_hidden();
                             std::process::exit(0);
                         }
-                        let _ = tx.send(crate::update::Found::Installed(v));
+                        let _ = tx.send(UpdateNews::Found(crate::update::Found::Installed(v)));
                         ctx.request_repaint();
                         return;
                     }
                     Ok(Some(crate::update::Found::Available(v, url))) => {
-                        if told.as_ref() != Some(&v) {
+                        if manual || told.as_ref() != Some(&v) {
                             told = Some(v.clone());
-                            let _ = tx.send(crate::update::Found::Available(v, url));
-                            ctx.request_repaint();
+                            let _ = tx.send(UpdateNews::Found(crate::update::Found::Available(v, url)));
                         }
                     }
+                    Ok(None) if manual => {
+                        let _ = tx.send(UpdateNews::Current);
+                    }
                     Ok(None) => {}
-                    Err(e) => eprintln!("güncelleme denetlenemedi: {e}"),
+                    Err(e) => {
+                        eprintln!("güncelleme denetlenemedi: {e}");
+                        last_check.store(now.saturating_sub(UPDATE_INTERVAL - UPDATE_RETRY), Relaxed);
+                        if manual {
+                            let _ = tx.send(UpdateNews::Failed(e));
+                        }
+                    }
                 }
+                ctx.request_repaint();
             }
-            std::thread::sleep(Duration::from_secs(6 * 3600));
+            // Bütün kopyalar aynı dakikada sormasın diye 10 dakikaya kadar rastgele kaydır
+            use std::hash::BuildHasher;
+            let jitter = std::collections::hash_map::RandomState::new().hash_one(now) % 600;
+            let next = if enabled.load(Relaxed) { (last_check.load(Relaxed) + UPDATE_INTERVAL).saturating_sub(unix_now()).min(UPDATE_INTERVAL) } else { UPDATE_INTERVAL };
+            manual = match wake_rx.recv_timeout(Duration::from_secs(next + jitter)) {
+                Ok(m) => m,
+                Err(RecvTimeoutError::Timeout) => false,
+                Err(RecvTimeoutError::Disconnected) => return,
+            };
         }
     });
-    rx
+    (rx, wake_tx)
 }
 
 /// Açılacak sekmeler ve etkin olanın sırası
@@ -135,6 +199,15 @@ fn startup_tabs(cfg: &Config, start: Option<PathBuf>) -> (Vec<PathBuf>, usize) {
     }
     let active = cfg.active.min(paths.len() - 1);
     (paths, active)
+}
+
+/// Uygulama silinmeden önce kaldırma betiği çağırır: klasörler yine eski uygulamada açılır,
+/// oturum açılınca başlatma kaydı silinir. Pencere açmaz.
+pub fn unregister() {
+    if win::is_default_file_manager() {
+        win::set_default_file_manager(false, load_config().previous_folder_app.as_deref());
+    }
+    win::set_autostart(false);
 }
 
 /// Pencere ve GPU sürücüsü hazırlanırken (~200 ms) ilk ekranı hazırlar: açılış klasörünü
@@ -238,6 +311,13 @@ enum Action {
     Sort(SortKey),
     SetView(usize),
     DropPaths { paths: Vec<PathBuf>, target: PathBuf, ctrl: bool, shift: bool },
+    Extract(PathBuf),
+    Compress,
+    ToggleSplit,
+    ShellInvoke(u32),
+    EditShellMenu,
+    /// Seçili öğeleri öbür bölmenin klasörüne kopyala ya da taşı
+    ToOtherPane { cut: bool },
     Undo,
 }
 
@@ -246,8 +326,25 @@ enum Dialog {
     ConfirmDelete { paths: Vec<PathBuf> },
     Conflict { files: Vec<PathBuf>, dest: PathBuf, cut: bool, names: Vec<String> },
     Help,
+    Palette { query: String, sel: usize },
+    /// Windows menü öğelerinden hangilerinin görüneceği: (kimlik, ad)
+    ShellItems(Vec<(String, String)>),
+    BatchRename { items: Vec<crate::rename::Item>, rule: crate::rename::Rule },
     #[cfg(not(windows))]
     Properties(Box<crate::properties::Properties>),
+}
+
+/// Komut paletindeki bir satırın yaptığı iş
+enum Cmd {
+    Do(Action),
+    Address,
+    Search,
+    Help,
+    Fullscreen,
+    Preview,
+    Hidden,
+    Extensions,
+    Theme(u8),
 }
 
 enum UndoOp {
@@ -256,6 +353,8 @@ enum UndoOp {
     Moved(Vec<(PathBuf, PathBuf)>),
     Copied(Vec<PathBuf>),
     Trashed(Vec<PathBuf>),
+    /// Toplu yeniden adlandırma: (eski, yeni)
+    Renamed(Vec<(PathBuf, PathBuf)>),
 }
 
 struct Renaming {
@@ -288,14 +387,28 @@ pub struct App {
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
     autostart: bool,
+    previous_folder_app: Option<String>,
+    /// Varsayılan dosya yöneticisi mi; menü ilk açılınca sorulur (Linux'ta bir süreç çalıştırır)
+    default_fm: Option<bool>,
     /// Arka plandaki denetleyici okur; kapatılınca bir sonraki denetim atlanır
     auto_update: Arc<AtomicBool>,
-    update_rx: std::sync::mpsc::Receiver<crate::update::Found>,
+    update_rx: std::sync::mpsc::Receiver<UpdateNews>,
+    /// Güncelleme denetleyicisini uyandırır; `true` menüden istenen denetimdir
+    update_wake: std::sync::mpsc::Sender<bool>,
+    /// Bu süreçte denetleyici çalışıyor; Windows'ta yalnızca sonraki açılışları karşılayan süreçte
+    checks_updates: bool,
+    /// Menüden istenen denetim sürüyor
+    update_checking: bool,
+    /// Kullanıcı menüden yeniden başlatmayı seçti: kapanınca yeni sürüm pencereyle açılır
+    restart_on_close: bool,
+    last_update_check: Arc<AtomicU64>,
     /// Yeni sürüm kuruldu: pencere kapanınca gizlenmek yerine yeni sürüm başlatılır
     update_installed: bool,
     /// Oturum açılışında başladı: pencere hiç gösterilmeden beklemeye geçer
     #[cfg_attr(not(windows), allow(dead_code))]
     start_hidden: bool,
+    /// Son sağlam pencere konumu ve boyutu, eframe'in kayıt biçiminde
+    window_state: Option<String>,
     /// Bilinen klasörler (Masaüstü, İndirilenler…) — açılışta bir kez
     known: Vec<(&'static str, &'static str, PathBuf)>,
     /// Gezinti bölmesinde açık düğümler
@@ -320,6 +433,17 @@ pub struct App {
     hwnd: Option<isize>,
     renaming: Option<Renaming>,
     undo: Vec<UndoOp>,
+    /// Sağ tık menüsüne eklenen Windows menü öğeleri; menü açıkken seçili öğeler için okunur
+    shell_menu: Option<(Vec<PathBuf>, Option<shell::ShellMenu>)>,
+    /// Bu karede bir öğe menüsü çizildi
+    shell_wanted: bool,
+    hidden_shell: Vec<String>,
+    /// Yan yana iki bölme: soldaki ve sağdaki sekmenin sırası
+    split: Option<[usize; 2]>,
+    /// Klavyenin ve komutların gittiği bölme (0 sol, 1 sağ)
+    focus: usize,
+    /// Etkin klasör ve içinde bulunduğu git deposunun dalı
+    git_branch: (PathBuf, Option<String>),
     /// Alt klasör listeleri (gezinti ağacı, adres çubuğu). Arka planda okunur; paylaşımlı
     /// tutulur ki her karede kopyalanmasın.
     subdirs: HashMap<PathBuf, Arc<[PathBuf]>>,
@@ -330,7 +454,8 @@ pub struct App {
     inject_release: Option<Pos2>,
     accent: Color32,
     zoom_acc: f32,
-    marquee: Option<Pos2>,
+    /// Seçim dikdörtgeninin başladığı sekme ve nokta
+    marquee: Option<(usize, Pos2)>,
     item_rects: Vec<(usize, Rect)>,
     grid_scroll: (f32, f32),
     silent_jobs: Vec<usize>,
@@ -768,6 +893,21 @@ pub(crate) mod g {
     pub const RESTORE: &str = "\u{E923}";
     pub const CLOSE: &str = "\u{E8BB}";
     pub const ICONS_VIEW: &str = "\u{E739}";
+    pub const OPEN: &str = "\u{E8E5}";
+    pub const OPEN_WITH: &str = "\u{E7AC}";
+    pub const SHARE: &str = "\u{E72D}";
+    pub const INFO: &str = "\u{E946}";
+    pub const PACKAGE: &str = "\u{E7B8}";
+    pub const NEW_TAB: &str = "\u{E8A7}";
+    pub const TERMINAL: &str = "\u{E756}";
+    pub const FOLDER_OPEN: &str = "\u{E838}";
+    pub const FOLDER: &str = "\u{E8B7}";
+    pub const DOCUMENT: &str = "\u{E8A5}";
+    pub const UNDO: &str = "\u{E7A7}";
+    pub const SELECT_ALL: &str = "\u{E8B3}";
+    pub const SETTINGS: &str = "\u{E713}";
+    pub const RULER: &str = "\u{ED5E}";
+    pub const VIEW: &str = "\u{E890}";
 }
 
 /// Fluent UI System Icons glif kodları (assets/fluent-icons.ttf, MIT)
@@ -801,6 +941,22 @@ pub(crate) mod g {
     pub const RESTORE: &str = "\u{EB96}";
     pub const CLOSE: &str = "\u{F369}";
     pub const ICONS_VIEW: &str = "\u{F462}";
+    // Paketteki font bunları içermiyor; menüde simge sütunları boş kalır
+    pub const OPEN: &str = "";
+    pub const OPEN_WITH: &str = "";
+    pub const SHARE: &str = "";
+    pub const INFO: &str = "";
+    pub const PACKAGE: &str = "";
+    pub const NEW_TAB: &str = "";
+    pub const TERMINAL: &str = "";
+    pub const FOLDER_OPEN: &str = "";
+    pub const FOLDER: &str = "";
+    pub const DOCUMENT: &str = "";
+    pub const UNDO: &str = "";
+    pub const SELECT_ALL: &str = "";
+    pub const SETTINGS: &str = "";
+    pub const RULER: &str = "";
+    pub const VIEW: &str = "";
 }
 
 /// Windows'un kendi sağ tık menüsü ve OLE sürükle-bırak yalnızca Windows'ta
@@ -1050,9 +1206,14 @@ impl App {
         let (paths, active) = startup_tabs(&cfg, start);
         let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
         let resident = win::serve(ctx.clone());
+        if resident && !crate::update::dev_build() {
+            std::thread::spawn(win::refresh_default_file_manager);
+        }
         let auto_update = Arc::new(AtomicBool::new(cfg.auto_update));
         // Aynı anda tek süreç güncellesin: sonraki açılışları karşılayan süreç
-        let update_rx = spawn_update_checker((resident || !cfg!(windows)).then(|| auto_update.clone()), ctx.clone());
+        let last_update_check = Arc::new(AtomicU64::new(cfg.last_update_check));
+        let checks_updates = (resident || !cfg!(windows)) && crate::update::enabled();
+        let (update_rx, update_wake) = spawn_update_checker(checks_updates.then(|| auto_update.clone()), last_update_check.clone(), ctx.clone());
         // Yalnızca etkin sekme hemen yüklenir; diğerleri ilk açıldıklarında
         let tabs = paths.into_iter().enumerate().map(|(i, p)| if i == active { Tab::new(p, &ctx) } else { Tab::new_lazy(p) }).collect();
 
@@ -1074,10 +1235,18 @@ impl App {
             background: cfg.background,
             resident,
             autostart: win::autostart(),
+            previous_folder_app: cfg.previous_folder_app,
+            default_fm: None,
             auto_update,
             update_rx,
+            update_wake,
+            checks_updates,
+            update_checking: false,
+            restart_on_close: false,
+            last_update_check,
             update_installed: false,
             start_hidden: hidden,
+            window_state: cc.storage.and_then(|s| s.get_string(WINDOW_KEY)),
             known: known_folders(),
             tree_open: Default::default(),
             drives: Arc::new(Mutex::new(vec![])),
@@ -1099,6 +1268,12 @@ impl App {
             type_names: HashMap::new(),
             hwnd: None,
             renaming: None,
+            git_branch: (PathBuf::new(), None),
+            split: None,
+            focus: 0,
+            shell_menu: None,
+            shell_wanted: false,
+            hidden_shell: cfg.hidden_shell_items,
             undo: vec![],
             subdirs: HashMap::new(),
             subdirs_pending: Default::default(),
@@ -1120,18 +1295,26 @@ impl App {
             ctx,
         };
         app.refresh_drives();
+        app.watch_drives();
         app
     }
 
     fn poll_update(&mut self) {
-        while let Ok(found) = self.update_rx.try_recv() {
-            match found {
-                crate::update::Found::Installed(v) => {
+        while let Ok(news) = self.update_rx.try_recv() {
+            self.update_checking = false;
+            match news {
+                UpdateNews::Found(crate::update::Found::Installed(v)) => {
                     self.update_installed = true;
                     self.toast(crate::i18n::tf("Swift Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.", &[&v]), false);
                 }
-                crate::update::Found::Available(v, url) => {
+                UpdateNews::Found(crate::update::Found::Available(v, url)) => {
                     self.toast(crate::i18n::tf("Yeni sürüm var: {}. İndirmek için: {}", &[&v, &url]), false);
+                }
+                UpdateNews::Current => {
+                    self.toast(crate::i18n::tf("Swift Explorer güncel: {}", &[&env!("CARGO_PKG_VERSION")]), false);
+                }
+                UpdateNews::Failed(e) => {
+                    self.toast(crate::i18n::tf("Güncelleme denetlenemedi: {}", &[&e]), true);
                 }
             }
         }
@@ -1151,10 +1334,13 @@ impl App {
             theme: self.theme,
             lang: self.lang,
             recent: self.recent.clone(),
+            hidden_shell_items: self.hidden_shell.clone(),
             tips_dismissed: self.tips_dismissed,
             grouped: self.grouped.clone(),
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
+            last_update_check: self.last_update_check.load(Relaxed),
+            previous_folder_app: self.previous_folder_app.clone(),
         };
         if let Some(p) = config_path() {
             if let Some(d) = p.parent() {
@@ -1176,6 +1362,25 @@ impl App {
             let d = win::drives();
             *store.lock().unwrap() = d;
             ctx.request_repaint();
+        });
+    }
+
+    /// USB bellek takılınca listeyi hemen yeniler. 20 saniyelik yenilemeyi beklemesin diye
+    /// sürücü maskesine saniyede bir bakar; maske değişmedikçe arayüzü uyandırmaz.
+    fn watch_drives(&self) {
+        let store = self.drives.clone();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let mut last = win::drive_mask();
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let mask = win::drive_mask();
+                if mask != last {
+                    last = mask;
+                    *store.lock().unwrap() = win::drives();
+                    ctx.request_repaint();
+                }
+            }
         });
     }
 
@@ -1247,10 +1452,17 @@ impl App {
             }
         }
         self.refresh_drives();
+        let _ = self.update_wake.send(false);
     }
 
     fn toast(&mut self, msg: impl Into<String>, error: bool) {
         self.toasts.push((msg.into(), Instant::now(), error));
+    }
+
+    fn set_theme(&mut self, theme: u8) {
+        self.theme = theme;
+        self.accent = theme_accent(theme);
+        apply_theme(&self.ctx, self.accent, theme);
     }
 
     fn mark_views_dirty(&mut self) {
@@ -1369,6 +1581,16 @@ impl App {
             UndoOp::Trashed(paths) => {
                 self.push_job(fsutil::spawn_restore(paths, ctx), false);
             }
+            UndoOp::Renamed(pairs) => {
+                let back: Vec<(PathBuf, PathBuf)> = pairs.into_iter().map(|(from, to)| (to, from)).collect();
+                match crate::rename::apply(&back) {
+                    Ok(()) => {
+                        self.toast(crate::i18n::t("Yeniden adlandırma geri alındı"), false);
+                        self.reload_active(None);
+                    }
+                    Err(e) => self.toast(crate::i18n::tf("Geri alınamadı: {}", &[&e]), true),
+                }
+            }
         }
     }
 
@@ -1387,7 +1609,7 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let typing = ctx.wants_keyboard_input();
         let focused = ctx.input(|i| i.focused);
-        let home = self.tabs[self.active].is_home();
+        let home = !self.tabs[self.active].lists_files();
 
         // Ctrl+V: panoda metin yoksa egui olay üretmez, doğrudan klavyeyi soruyoruz.
         let v = focused && win::ctrl_v_down();
@@ -1449,6 +1671,18 @@ impl App {
             }
             if shortcut(i, Modifiers::NONE, Key::F1) {
                 self.dialog = Dialog::Help;
+            }
+            if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::P) {
+                self.dialog = Dialog::Palette { query: String::new(), sel: 0 };
+            }
+            if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::S) {
+                actions.push(Action::ToggleSplit);
+            }
+            if let Some(p) = self.split {
+                if shortcut(i, Modifiers::NONE, Key::F6) {
+                    self.focus = 1 - self.focus;
+                    self.active = p[self.focus];
+                }
             }
             if shortcut(i, Modifiers::NONE, Key::F11) {
                 let fs = i.viewport().fullscreen.unwrap_or(false);
@@ -1679,6 +1913,7 @@ impl App {
             Action::Forward => self.tab().go_forward(&ctx),
             Action::Refresh => {
                 self.subdirs.clear();
+                self.git_branch.0 = PathBuf::new();
                 let t = self.tab();
                 if t.search.is_none() {
                     t.refresh_free_space(&ctx);
@@ -1699,6 +1934,13 @@ impl App {
                 if self.tabs.len() > 1 {
                     self.tabs[i].cancel_search();
                     self.tabs.remove(i);
+                    if let Some(p) = &mut self.split {
+                        if p.contains(&i) {
+                            self.split = None;
+                        } else {
+                            p.iter_mut().filter(|x| **x > i).for_each(|x| *x -= 1);
+                        }
+                    }
                     if self.active >= self.tabs.len() || self.active > i {
                         self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
                     }
@@ -1766,8 +2008,54 @@ impl App {
                 }
             }
             Action::Rename => {
-                if let Some(e) = self.tab().selected_entries().first() {
+                let sel = self.tab().selected_entries();
+                if sel.len() > 1 {
+                    let items = sel.iter().map(|e| crate::rename::Item { path: e.path.clone(), is_dir: e.is_dir, modified: e.modified }).collect();
+                    self.dialog = Dialog::BatchRename { items, rule: crate::rename::Rule { start: 1, digits: 1, ..Default::default() } };
+                } else if let Some(e) = sel.first() {
                     self.renaming = Some(Renaming { path: e.path.clone(), text: e.name.clone(), first: true });
+                }
+            }
+            Action::Extract(p) => {
+                let job = crate::archive::spawn_extract(p, ctx.clone());
+                self.push_job(job, true);
+            }
+            Action::Compress => {
+                let paths = self.tab().selected_paths();
+                if !paths.is_empty() && !busy_here {
+                    let job = crate::archive::spawn_compress(paths, ctx.clone());
+                    self.push_job(job, true);
+                }
+            }
+            Action::ShellInvoke(id) => {
+                let menu = self.shell_menu.as_ref().and_then(|(_, m)| m.as_ref());
+                if let (Some(m), Some(hwnd)) = (menu, self.hwnd) {
+                    if let MenuResult::Rename = m.invoke(hwnd, id) {
+                        self.apply(Action::Rename);
+                    }
+                }
+            }
+            Action::EditShellMenu => {
+                if let Some((_, Some(m))) = &self.shell_menu {
+                    let items = m.items.iter().map(|e| (e.key.clone(), e.text.clone())).collect();
+                    self.dialog = Dialog::ShellItems(items);
+                }
+            }
+            Action::ToggleSplit => {
+                if self.split.take().is_none() {
+                    let p = self.tabs[self.active].path.clone();
+                    self.tabs.push(Tab::new(p, &ctx));
+                    self.split = Some([self.active, self.tabs.len() - 1]);
+                    self.focus = 0;
+                }
+            }
+            Action::ToOtherPane { cut } => {
+                if let Some(p) = self.split {
+                    let dest = self.tabs[p[1 - self.focus]].path.clone();
+                    let files = self.tab().selected_paths();
+                    if !files.is_empty() && !crate::tab::is_virtual(&dest) {
+                        self.start_transfer(files, dest, cut);
+                    }
                 }
             }
             Action::NewFolder => self.create_new(true),
@@ -1858,7 +2146,8 @@ impl App {
             }
             Action::StartSearch => {
                 self.renaming = None;
-                self.tab().start_search(&ctx);
+                let roots = if self.tab().is_pc() { self.drives.lock().unwrap().iter().map(|d| d.root.clone()).collect() } else { vec![self.tab().path.clone()] };
+                self.tab().start_search(roots, &ctx);
             }
             Action::ExitSearch => self.tab().exit_search(&ctx),
             Action::Sort(k) => {
@@ -2159,8 +2448,8 @@ impl App {
                     t.view_dirty = true;
                 }
                 if submit {
-                    if t.is_home() {
-                        let p = expand_path(t.filter.trim());
+                    let p = expand_path(t.filter.trim());
+                    if t.is_home() && (p.exists() || !t.is_pc()) {
                         t.filter.clear();
                         if p.exists() {
                             actions.push(Action::Navigate(p));
@@ -2533,11 +2822,26 @@ impl App {
                 }
                 ui.separator();
                 ui.checkbox(&mut self.show_preview, crate::i18n::t("Ayrıntılar bölmesi (Alt+P)"));
+                let mut split = self.split.is_some();
+                if ui.checkbox(&mut split, crate::i18n::t("Çift bölme (Ctrl+Shift+S)")).changed() {
+                    actions.push(Action::ToggleSplit);
+                }
                 if ui.checkbox(&mut self.show_hidden, crate::i18n::t("Gizli öğeler (Ctrl+H)")).changed() {
                     self.subdirs.clear();
                     self.mark_views_dirty();
                 }
                 ui.checkbox(&mut self.show_ext, crate::i18n::t("Dosya adı uzantıları"));
+                let mut on = *self.default_fm.get_or_insert_with(win::is_default_file_manager);
+                let tip = if cfg!(windows) {
+                    "Klasörler, sürücüler ve Win+E bu uygulamada açılır. Uygulamayı silmeden ya da taşımadan önce bunu kapatın."
+                } else {
+                    "Klasörler bu uygulamada açılır."
+                };
+                if ui.checkbox(&mut on, crate::i18n::t("Varsayılan dosya gezgini olarak kullan")).on_hover_text(crate::i18n::t(tip)).changed() {
+                    let before = win::set_default_file_manager(on, self.previous_folder_app.as_deref());
+                    self.previous_folder_app = before;
+                    self.default_fm = Some(win::is_default_file_manager());
+                }
                 if cfg!(windows) {
                     let r = ui
                         .checkbox(&mut self.background, crate::i18n::t("Anında açılış için arka planda bekle"))
@@ -2560,6 +2864,20 @@ impl App {
                         self.auto_update.store(on, Relaxed);
                     }
                 }
+                if self.update_installed {
+                    // Kopyalama sürerken kapanırsa iş yarıda kalır
+                    let r = ui.add_enabled(!fsutil::jobs_running(), egui::Button::new(crate::i18n::t("Yeni sürüme geçmek için yeniden başlat")));
+                    if r.clicked() {
+                        self.restart_on_close = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.close_menu();
+                    }
+                } else if self.checks_updates {
+                    let label = if self.update_checking { "Güncellemeler denetleniyor…" } else { "Güncellemeleri şimdi denetle" };
+                    if ui.add_enabled(!self.update_checking, egui::Button::new(crate::i18n::t(label))).clicked() {
+                        self.update_checking = self.update_wake.send(true).is_ok();
+                    }
+                }
                 ui.separator();
                 ui.label(RichText::new(crate::i18n::t("Tema")).weak());
                 let names = [crate::i18n::t("Sistem"), crate::i18n::t("Açık"), crate::i18n::t("Koyu")].into_iter().chain(scheme::SCHEMES.iter().map(|c| c.name));
@@ -2570,9 +2888,7 @@ impl App {
                             ui.end_row();
                         }
                         if ui.selectable_label(self.theme == v, n).clicked() && self.theme != v {
-                            self.theme = v;
-                            self.accent = theme_accent(v);
-                            apply_theme(ui.ctx(), self.accent, v);
+                            self.set_theme(v);
                         }
                     }
                 });
@@ -2588,6 +2904,10 @@ impl App {
                             self.type_names.clear();
                             self.refresh_drives();
                             self.mark_views_dirty();
+                            // Klasörlerin sağ tık menüsündeki "Swift Explorer ile aç" yeni dilde görünsün
+                            if !crate::update::dev_build() {
+                                std::thread::spawn(win::refresh_default_file_manager);
+                            }
                         }
                     }
                 });
@@ -2853,7 +3173,7 @@ impl App {
         let id = egui::Id::new(("page_group", key));
         let open = !ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
-        if group_header(ui, rect.with_max_x(rect.left() + 260.0), label, open, id.with("h")).clicked() {
+        if group_header(ui, rect.with_max_x(rect.left() + 260.0), label, open, ui.id().with(("page_group", key))).clicked() {
             ui.ctx().data_mut(|d| d.insert_temp(id, open));
         }
         open
@@ -2947,7 +3267,9 @@ impl App {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(6.0);
             if self.page_group(ui, "drives", crate::i18n::t("Cihazlar ve sürücüler")) {
-                let drives = self.drives.lock().unwrap().clone();
+                // Yazarken sürücüleri süz; Enter tüm sürücülerde arar
+                let pat = fsutil::Pattern::new(&self.tabs[self.active].filter);
+                let drives: Vec<DriveInfo> = self.drives.lock().unwrap().iter().filter(|d| pat.matches(&d.label.to_lowercase())).cloned().collect();
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     ui.add_space(10.0);
@@ -3068,98 +3390,174 @@ fn type_name_cached(map: &mut HashMap<String, String>, e: &Entry) -> String {
         .clone()
 }
 
-fn mi(ui: &mut egui::Ui, icon: &str, text: &str) -> bool {
-    ui.add(egui::Button::new(icon_label(ui, icon, None, text))).clicked()
+/// Sağ tık menülerinin ortak görünümü: 28 px satırlar, görünür ayraçlar
+fn menu_style(ui: &mut egui::Ui) {
+    ui.set_min_width(260.0);
+    // Varsayılan ayraç rengi menü zemininde neredeyse görünmüyor; menü kenarlığı rengi kullanılır
+    let stroke = ui.visuals().window_stroke;
+    ui.visuals_mut().widgets.noninteractive.bg_stroke = stroke;
+    ui.spacing_mut().button_padding = egui::vec2(8.0, 5.0);
+    // Simgeli uygulama öğelerinde metin, glifli satırlarla aynı yerden başlasın
+    ui.spacing_mut().icon_spacing = 10.0;
 }
 
-/// Öğe sağ tık menüsü (sık kullanılanlar + Windows'un tam menüsü)
-fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, actions: &mut Vec<Action>) {
-    ui.set_min_width(240.0);
-    if mi(ui, "▶", crate::i18n::t("Aç                              Enter")) {
-        actions.push(Action::OpenSelected);
+/// 16 px simge sütunu ve ad. Simge yoksa sütun boş kalır, ad yine aynı yerden başlar.
+fn row_job(ui: &egui::Ui, glyph: &str, text: &str) -> egui::text::LayoutJob {
+    use egui::text::TextFormat;
+    let mut job = egui::text::LayoutJob::default();
+    let color = ui.visuals().text_color();
+    if !glyph.is_empty() {
+        job.append(glyph, 0.0, TextFormat { font_id: fluent_font(16.0), color, valign: Align::Center, ..Default::default() });
+    }
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    job.append(text, if glyph.is_empty() { 26.0 } else { 10.0 }, TextFormat { font_id: font, color, valign: Align::Center, ..Default::default() });
+    job
+}
+
+/// Menü satırı; `key` "Kes (Ctrl+X)" gibi kısayollu bir metinse kısayol sağa yazılır
+fn menu_item(ui: &mut egui::Ui, glyph: &str, key: &str) -> bool {
+    let (name, keys) = crate::palette::split_shortcut(crate::i18n::t(key));
+    ui.add(egui::Button::new(row_job(ui, glyph, name)).shortcut_text(keys)).clicked()
+}
+
+/// Tıklanırsa eylemi ekleyip menüyü kapatır
+fn menu_action(ui: &mut egui::Ui, actions: &mut Vec<Action>, glyph: &str, key: &str, action: Action) {
+    if menu_item(ui, glyph, key) {
+        actions.push(action);
         ui.close_menu();
     }
+}
+
+/// Menünün üstündeki simge satırı; tıklanan düğmenin sırası
+fn menu_strip(ui: &mut egui::Ui, buttons: &[(&str, &str)]) -> Option<usize> {
+    let mut hit = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let w = buttons.len() as f32 * 44.0 - 4.0;
+        ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
+        for (i, (glyph, tip)) in buttons.iter().enumerate() {
+            if flat_icon(ui, glyph, egui::vec2(40.0, 34.0), 16.0, true).on_hover_text(crate::i18n::t(tip)).clicked() {
+                hit = Some(i);
+            }
+        }
+    });
+    hit
+}
+
+fn shell_entry(ui: &mut egui::Ui, e: &shell::ShellEntry, actions: &mut Vec<Action>) {
+    let image = e.icon.as_ref().map(|tex| egui::Image::new(tex).fit_to_exact_size(egui::vec2(16.0, 16.0)));
+    if !e.children.is_empty() {
+        let contents = |ui: &mut egui::Ui| {
+            menu_style(ui);
+            for c in &e.children {
+                shell_entry(ui, c, actions);
+            }
+        };
+        match image {
+            Some(img) => ui.menu_image_text_button(img, &e.text, contents),
+            None => ui.menu_button(row_job(ui, "", &e.text), contents),
+        };
+        return;
+    }
+    let b = match image {
+        Some(img) => egui::Button::image_and_text(img, &e.text),
+        None => egui::Button::new(row_job(ui, "", &e.text)),
+    };
+    if ui.add(b).clicked() {
+        actions.push(Action::ShellInvoke(e.id));
+        ui.close_menu();
+    }
+}
+
+/// Menüde doğrudan görünen uygulama öğesi sayısı; fazlası "Diğer uygulamalar" altına girer
+const SHELL_INLINE: usize = 4;
+
+/// Öğe sağ tık menüsü, Windows 11 düzeninde: üstte simge satırı, altında komutlar ve uygulamalar.
+/// `shell`: seçili öğelerin Windows menüsünden okunan uygulama öğeleri, `hidden`: gizlenenler
+#[allow(clippy::too_many_arguments)]
+fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, shell: Option<&shell::ShellMenu>, hidden: &[String], wanted: &mut bool, actions: &mut Vec<Action>) {
+    *wanted = true;
+    menu_style(ui);
+    // Windows'un paylaş penceresi varsa simge satırına çıkar
+    let share = shell.and_then(|sm| sm.items.iter().find(|e| e.key.eq_ignore_ascii_case("verb:Windows.ModernShare")));
+    let mut strip = vec![(g::CUT, "Kes (Ctrl+X)", Action::Cut), (g::COPY, "Kopyala (Ctrl+C)", Action::Copy), (g::RENAME, "Yeniden adlandır (F2)", Action::Rename)];
+    if let Some(s) = share {
+        strip.push((g::SHARE, "Paylaş", Action::ShellInvoke(s.id)));
+    }
+    strip.push((g::DELETE, "Sil (Del)  ·  Kalıcı sil: Shift+Del", Action::Delete { permanent: false }));
+    let buttons: Vec<(&str, &str)> = strip.iter().map(|(glyph, tip, _)| (*glyph, *tip)).collect();
+    if let Some(i) = menu_strip(ui, &buttons) {
+        actions.push(strip.swap_remove(i).2);
+        ui.close_menu();
+    }
+    ui.separator();
+
+    menu_action(ui, actions, g::OPEN, "Aç                              Enter", Action::OpenSelected);
     if is_dir {
-        if mi(ui, "🗂", crate::i18n::t("Yeni sekmede aç")) {
-            actions.push(Action::NewTab(path.to_path_buf()));
-            ui.close_menu();
-        }
-        if mi(ui, "📋", crate::i18n::t("Buraya yapıştır")) {
-            actions.push(Action::PasteInto(path.to_path_buf()));
-            ui.close_menu();
-        }
+        menu_action(ui, actions, g::NEW_TAB, "Yeni sekmede aç", Action::NewTab(path.to_path_buf()));
+        menu_action(ui, actions, g::PASTE, "Buraya yapıştır", Action::PasteInto(path.to_path_buf()));
     } else {
-        if mi(ui, "🔀", crate::i18n::t("Birlikte aç…")) {
-            actions.push(Action::OpenWith(path.to_path_buf()));
-            ui.close_menu();
+        menu_action(ui, actions, g::OPEN_WITH, "Birlikte aç…", Action::OpenWith(path.to_path_buf()));
+        if crate::archive::is_zip(path) {
+            menu_action(ui, actions, g::PACKAGE, "Buraya çıkart", Action::Extract(path.to_path_buf()));
         }
     }
     if in_search {
         if let Some(parent) = path.parent() {
-            if mi(ui, "📂", crate::i18n::t("Dosya konumunu aç")) {
-                actions.push(Action::NewTab(parent.to_path_buf()));
-                ui.close_menu();
-            }
+            menu_action(ui, actions, g::FOLDER_OPEN, "Dosya konumunu aç", Action::NewTab(parent.to_path_buf()));
         }
     }
-    ui.separator();
-    if mi(ui, "✂", crate::i18n::t("Kes                             Ctrl+X")) {
-        actions.push(Action::Cut);
-        ui.close_menu();
+    if !in_search {
+        menu_action(ui, actions, g::PACKAGE, "Zip dosyasına sıkıştır", Action::Compress);
     }
-    if mi(ui, "📄", crate::i18n::t("Kopyala                       Ctrl+C")) {
-        actions.push(Action::Copy);
-        ui.close_menu();
-    }
-    if mi(ui, "🔗", crate::i18n::t("Yol olarak kopyala   Ctrl+Shift+C")) {
-        actions.push(Action::CopyPath);
-        ui.close_menu();
-    }
-    if mi(ui, "✏", crate::i18n::t("Yeniden adlandır          F2")) {
-        actions.push(Action::Rename);
-        ui.close_menu();
-    }
-    if mi(ui, "🗑", crate::i18n::t("Sil                               Del")) {
-        actions.push(Action::Delete { permanent: false });
-        ui.close_menu();
-    }
-    ui.separator();
+    menu_action(ui, actions, g::LINK, "Yolu kopyala (Ctrl+Shift+C)", Action::CopyPath);
     if is_dir {
-        if mi(ui, "📏", crate::i18n::t("Boyutu hesapla")) {
-            actions.push(Action::CalcSize);
-            ui.close_menu();
-        }
-        if mi(ui, "📌", crate::i18n::t("Hızlı erişime sabitle")) {
-            actions.push(Action::AddBookmark(path.to_path_buf()));
-            ui.close_menu();
-        }
-        if mi(ui, "⌨", crate::i18n::t("Terminalde aç")) {
-            actions.push(Action::Terminal(path.to_path_buf()));
-            ui.close_menu();
-        }
+        menu_action(ui, actions, g::PIN, "Hızlı erişime sabitle", Action::AddBookmark(path.to_path_buf()));
+        menu_action(ui, actions, g::TERMINAL, "Terminalde aç", Action::Terminal(path.to_path_buf()));
+        menu_action(ui, actions, g::RULER, "Boyutu hesapla", Action::CalcSize);
     }
     let show_label = if cfg!(windows) { "Explorer'da göster" } else { "Dosya yöneticisinde göster" };
-    if mi(ui, "🔎", crate::i18n::t(show_label)) {
-        actions.push(Action::ShowInExplorer(path.to_path_buf()));
-        ui.close_menu();
-    }
-    if mi(ui, "ℹ", crate::i18n::t("Özellikler                   Alt+Enter")) {
-        actions.push(Action::Properties(path.to_path_buf()));
-        ui.close_menu();
+    menu_action(ui, actions, g::FOLDER_OPEN, show_label, Action::ShowInExplorer(path.to_path_buf()));
+    menu_action(ui, actions, g::INFO, "Özellikler              Alt+Enter", Action::Properties(path.to_path_buf()));
+
+    if let Some(sm) = shell {
+        let apps: Vec<&shell::ShellEntry> = sm.items.iter().filter(|e| !hidden.contains(&e.key) && share.is_none_or(|s| !std::ptr::eq(s, *e))).collect();
+        ui.separator();
+        for e in apps.iter().take(SHELL_INLINE) {
+            shell_entry(ui, e, actions);
+        }
+        let edit = |ui: &mut egui::Ui, actions: &mut Vec<Action>| {
+            if menu_item(ui, g::SETTINGS, "Bu listeyi düzenle…") {
+                actions.push(Action::EditShellMenu);
+                ui.close_menu();
+            }
+        };
+        if apps.len() > SHELL_INLINE {
+            ui.menu_button(row_job(ui, g::MORE, crate::i18n::t("Diğer uygulamalar")), |ui| {
+                menu_style(ui);
+                for e in &apps[SHELL_INLINE..] {
+                    shell_entry(ui, e, actions);
+                }
+                ui.separator();
+                edit(ui, actions);
+            });
+        } else {
+            edit(ui, actions);
+        }
     }
     if NATIVE_MENU {
         ui.separator();
-        if mi(ui, "☰", crate::i18n::t("Daha fazla seçenek göster  Shift+F10")) {
+        if menu_item(ui, g::MORE, "Daha fazla seçenek göster  Shift+F10") {
             actions.push(Action::ShellMenu { extended: false });
             ui.close_menu();
         }
     }
 }
 
-/// Arka plan (boş alan) sağ tık menüsü
 fn background_menu(ui: &mut egui::Ui, current: &Path, in_search: bool, can_undo: bool, view_level: usize, actions: &mut Vec<Action>) {
-    ui.set_min_width(240.0);
-    ui.menu_button(crate::i18n::t("☰  Görünüm"), |ui| {
+    menu_style(ui);
+    ui.menu_button(row_job(ui, g::VIEW, crate::i18n::t("Görünüm")), |ui| {
+        menu_style(ui);
         for (i, (_, n)) in VIEW_LEVELS.iter().enumerate() {
             if ui.radio(view_level == i, crate::i18n::t(n)).clicked() {
                 actions.push(Action::SetView(i));
@@ -3167,59 +3565,33 @@ fn background_menu(ui: &mut egui::Ui, current: &Path, in_search: bool, can_undo:
             }
         }
     });
-    ui.menu_button(crate::i18n::t("↕  Sırala"), |ui| {
-        for (k, n) in [(SortKey::Name, crate::i18n::t("Ad")), (SortKey::Modified, crate::i18n::t("Değiştirme tarihi")), (SortKey::Type, crate::i18n::t("Tür")), (SortKey::Size, crate::i18n::t("Boyut"))] {
-            if ui.button(n).clicked() {
+    ui.menu_button(row_job(ui, g::SORT, crate::i18n::t("Sırala")), |ui| {
+        menu_style(ui);
+        for (k, n) in [(SortKey::Name, "Ad"), (SortKey::Modified, "Değiştirme tarihi"), (SortKey::Type, "Tür"), (SortKey::Size, "Boyut")] {
+            if ui.add(egui::Button::new(row_job(ui, "", crate::i18n::t(n)))).clicked() {
                 actions.push(Action::Sort(k));
                 ui.close_menu();
             }
         }
     });
-    if mi(ui, "⟳", crate::i18n::t("Yenile                          F5")) {
-        actions.push(Action::Refresh);
-        ui.close_menu();
-    }
+    menu_action(ui, actions, g::REFRESH, "Yenile (F5)", Action::Refresh);
     ui.separator();
     if !in_search {
-        if mi(ui, "📋", crate::i18n::t("Yapıştır                       Ctrl+V")) {
-            actions.push(Action::Paste);
-            ui.close_menu();
-        }
+        menu_action(ui, actions, g::PASTE, "Yapıştır (Ctrl+V)", Action::Paste);
         if can_undo {
-            if mi(ui, "↶", crate::i18n::t("Geri al                         Ctrl+Z")) {
-                actions.push(Action::Undo);
-                ui.close_menu();
-            }
+            menu_action(ui, actions, g::UNDO, "Geri al                   Ctrl+Z", Action::Undo);
         }
-        ui.separator();
-        ui.menu_button(crate::i18n::t("➕  Yeni"), |ui| {
-            if ui.button(crate::i18n::t("📁  Klasör    Ctrl+Shift+N")).clicked() {
-                actions.push(Action::NewFolder);
-                ui.close_menu();
-            }
-            if ui.button(crate::i18n::t("📝  Metin Belgesi")).clicked() {
-                actions.push(Action::NewFile);
-                ui.close_menu();
-            }
+        ui.menu_button(row_job(ui, g::NEW, crate::i18n::t("Yeni")), |ui| {
+            menu_style(ui);
+            menu_action(ui, actions, g::FOLDER, "Klasör          Ctrl+Shift+N", Action::NewFolder);
+            menu_action(ui, actions, g::DOCUMENT, "Metin Belgesi", Action::NewFile);
         });
         ui.separator();
     }
-    if mi(ui, "☑", crate::i18n::t("Tümünü seç                Ctrl+A")) {
-        actions.push(Action::SelectAll);
-        ui.close_menu();
-    }
-    if mi(ui, "⌨", crate::i18n::t("Terminalde aç")) {
-        actions.push(Action::Terminal(current.to_path_buf()));
-        ui.close_menu();
-    }
-    if mi(ui, "📌", crate::i18n::t("Hızlı erişime sabitle    Ctrl+D")) {
-        actions.push(Action::AddBookmark(current.to_path_buf()));
-        ui.close_menu();
-    }
-    if mi(ui, "ℹ", crate::i18n::t("Özellikler")) {
-        actions.push(Action::Properties(current.to_path_buf()));
-        ui.close_menu();
-    }
+    menu_action(ui, actions, g::SELECT_ALL, "Tümünü seç            Ctrl+A", Action::SelectAll);
+    menu_action(ui, actions, g::TERMINAL, "Terminalde aç", Action::Terminal(current.to_path_buf()));
+    menu_action(ui, actions, g::PIN, "Hızlı erişime sabitle   Ctrl+D", Action::AddBookmark(current.to_path_buf()));
+    menu_action(ui, actions, g::INFO, "Özellikler", Action::Properties(current.to_path_buf()));
 }
 
 fn drop_target_p(painter: &egui::Painter, resp: &egui::Response, target: &Path, accent: Color32, actions: &mut Vec<Action>) -> bool {
@@ -3294,12 +3666,12 @@ impl App {
         };
 
         // Boş alan: tık seçimi temizler, sürükleme seçim dikdörtgeni çizer, sağ tık klasör menüsü
-        let bg = ui.interact(ui.max_rect(), egui::Id::new("list_bg"), Sense::click_and_drag());
+        let bg = ui.interact(ui.max_rect(), ui.id().with("list_bg"), Sense::click_and_drag());
         if bg.clicked() {
             self.tab().selection.clear();
         }
         if bg.drag_started() {
-            self.marquee = bg.interact_pointer_pos();
+            self.marquee = bg.interact_pointer_pos().map(|p| (self.active, p));
             if !ui.input(|i| i.modifiers.ctrl) {
                 self.tab().selection.clear();
             }
@@ -3333,6 +3705,9 @@ impl App {
             }
         }
 
+        if in_search {
+            self.extension_filter(ui);
+        }
         self.item_rects.clear();
         if self.view_level == 0 {
             self.details_view(ui, actions);
@@ -3349,7 +3724,7 @@ impl App {
         }
 
         // Seçim dikdörtgeni
-        if let Some(start) = self.marquee {
+        if let Some((_, start)) = self.marquee.filter(|(tab, _)| *tab == self.active) {
             if bg.dragged() {
                 if let Some(now) = ui.input(|i| i.pointer.latest_pos()) {
                     let r = Rect::from_two_pos(start, now);
@@ -3370,8 +3745,94 @@ impl App {
         }
     }
 
+    fn pane(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let t = &self.tabs[self.active];
+        if t.lists_files() {
+            self.file_area(ui, actions);
+        } else if t.is_pc() {
+            self.pc_page(ui, actions);
+        } else {
+            self.home_page(ui, actions);
+        }
+    }
+
+    /// Sekme şeridinden ya da kısayolla seçilen sekme odaktaki bölmeye geçer
+    fn sync_split(&mut self) {
+        let Some(p) = &mut self.split else { return };
+        if p[self.focus] != self.active {
+            if p[1 - self.focus] == self.active {
+                self.focus = 1 - self.focus;
+            } else {
+                p[self.focus] = self.active;
+            }
+        }
+    }
+
+    fn split_panes(&mut self, ui: &mut egui::Ui, panes: [usize; 2], actions: &mut Vec<Action>) {
+        let full = ui.max_rect();
+        let mid = full.center().x;
+        let rects = [full.with_max_x(mid - 4.0), full.with_min_x(mid + 4.0)];
+        let p = pal_of(ui);
+        ui.painter().vline(mid, full.y_range(), Stroke::new(1.0, p.line));
+        // Bir bölmeye tıklayınca odak oraya geçer; menü ve pencereler bu katmanda değil
+        let press = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+        if let Some(pos) = press.filter(|&pos| ui.ctx().layer_id_at(pos) == Some(ui.layer_id())) {
+            if let Some(side) = rects.iter().position(|r| r.contains(pos)) {
+                self.focus = side;
+            }
+        }
+        // Odaktaki bölme en son çizilir: ızgara sütunu ve kaydırma gibi paylaşılan durum onun olur
+        for side in [1 - self.focus, self.focus] {
+            self.active = panes[side];
+            let renaming = if side == self.focus { None } else { self.renaming.take() };
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rects[side]).id_salt(("pane", side)));
+            child.set_clip_rect(rects[side].intersect(ui.clip_rect()));
+            self.pane(&mut child, actions);
+            if renaming.is_some() {
+                self.renaming = renaming;
+            }
+        }
+        self.active = panes[self.focus];
+        let r = rects[self.focus];
+        ui.painter().hline(r.x_range(), r.top() + 1.0, Stroke::new(2.0, self.accent));
+    }
+
+    /// Arama sonuçlarının üstünde uzantı seçimi: "Tümü  .pdf 12  .txt 3"
+    fn extension_filter(&mut self, ui: &mut egui::Ui) {
+        let t = self.tab();
+        t.count_search_extensions();
+        let Some(s) = &t.search else { return };
+        if s.ext_counts.is_empty() {
+            return;
+        }
+        let cur = s.ext.clone();
+        let mut pick = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if ui.selectable_label(cur.is_none(), crate::i18n::t("Tümü")).clicked() {
+                pick = Some(None);
+            }
+            for (x, n) in &s.ext_counts {
+                let on = cur.as_deref() == Some(x.as_str());
+                if ui.selectable_label(on, format!(".{x}  {n}")).clicked() {
+                    pick = Some(if on { None } else { Some(x.clone()) });
+                }
+            }
+        });
+        ui.add_space(4.0);
+        if let Some(ext) = pick {
+            if let Some(s) = &mut t.search {
+                s.ext = ext;
+            }
+            t.selection.clear();
+            t.cursor = None;
+            t.view_dirty = true;
+        }
+    }
+
     fn details_view(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        let App { tabs, active, images, renaming, type_names, show_ext, accent, clipboard, dir_sizes, sort, asc, item_rects, .. } = self;
+        let App { tabs, active, images, renaming, type_names, show_ext, accent, clipboard, dir_sizes, sort, asc, item_rects, shell_menu, shell_wanted, hidden_shell, .. } = self;
+        let shell_items = shell_menu.as_ref().and_then(|(_, m)| m.as_ref());
         let (sort, asc, show_ext, accent) = (*sort, *asc, *show_ext, *accent);
         let t = &mut tabs[*active];
         let in_search = t.search.is_some();
@@ -3467,7 +3928,7 @@ impl App {
                             let g = &t.groups[gi];
                             row.col(|ui| {
                                 let rect = ui.max_rect().with_max_x(ui.max_rect().left() + 260.0);
-                                if group_header(ui, rect, crate::i18n::t(&g.label), !g.collapsed, egui::Id::new(("ghead", &g.label))).clicked() {
+                                if group_header(ui, rect, crate::i18n::t(&g.label), !g.collapsed, ui.id().with(("ghead", &g.label))).clicked() {
                                     toggle_group = Some(g.label.clone());
                                 }
                             });
@@ -3551,7 +4012,7 @@ impl App {
                     }
                     if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
                         let (p, d) = (e.path.clone(), e.is_dir);
-                        resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
+                        resp.context_menu(|ui| item_menu(ui, &p, d, in_search, shell_items, hidden_shell, shell_wanted, actions));
                     }
                 });
             });
@@ -3649,7 +4110,7 @@ impl App {
                 let (row_start, row_end) = match line {
                     GLine::Head(gi) => {
                         let g = &t.groups[*gi];
-                        if group_header(ui, line_rect.with_max_x(line_rect.left() + 260.0).shrink2(egui::vec2(0.0, 3.0)), crate::i18n::t(&g.label), !g.collapsed, egui::Id::new(("ghead", &g.label))).clicked() {
+                        if group_header(ui, line_rect.with_max_x(line_rect.left() + 260.0).shrink2(egui::vec2(0.0, 3.0)), crate::i18n::t(&g.label), !g.collapsed, ui.id().with(("ghead", &g.label))).clicked() {
                             toggle_group = Some(g.label.clone());
                         }
                         continue;
@@ -3739,7 +4200,8 @@ impl App {
                         });
                         if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
                             let (p, d) = (e.path.clone(), e.is_dir);
-                            resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
+                            let shell_items = self.shell_menu.as_ref().and_then(|(_, m)| m.as_ref());
+                            resp.context_menu(|ui| item_menu(ui, &p, d, in_search, shell_items, &self.hidden_shell, &mut self.shell_wanted, actions));
                         }
                     }
                 }
@@ -3766,7 +4228,7 @@ impl App {
         let (sel, cur_path, count, home) = {
             let t = &self.tabs[self.active];
             let sel: Vec<Entry> = t.selected_entries().into_iter().cloned().collect();
-            (sel, t.path.clone(), t.view.len(), t.is_home())
+            (sel, t.path.clone(), t.view.len(), !t.lists_files())
         };
         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             ui.add_space(8.0);
@@ -3831,17 +4293,18 @@ impl App {
                 }
                 row(crate::i18n::t("Konum"), e.path.parent().map(|p| p.display().to_string()).unwrap_or_default());
             });
-            if e.is_dir || thumb || e.size == 0 {
+            if thumb || (!e.is_dir && e.size == 0) {
                 return;
             }
-            // Metin önizlemesi (arka planda okunur)
+            // Metin ya da klasör önizlemesi (arka planda okunur)
             if self.preview.path.as_ref() != Some(&e.path) {
                 self.preview.path = Some(e.path.clone());
                 *self.preview.data.lock().unwrap() = None;
                 let store = self.preview.data.clone();
                 let p = e.path.clone();
+                let show_hidden = self.show_hidden;
                 std::thread::spawn(move || {
-                    let d = fsutil::read_preview(&p);
+                    let d = if e.is_dir { fsutil::read_folder_preview(&p, show_hidden, 200) } else { fsutil::read_preview(&p) };
                     *store.lock().unwrap() = Some((p, d));
                     ctx.request_repaint();
                 });
@@ -3865,6 +4328,27 @@ impl App {
                     });
                 }
             }
+            if let Some((p, PreviewData::Folder(items, total))) = data.as_ref() {
+                if p == &e.path {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(crate::i18n::t("İçindekiler")).strong());
+                    ui.separator();
+                    if items.is_empty() {
+                        ui.label(RichText::new(crate::i18n::t("Bu klasör boş.")).weak());
+                    }
+                    for it in items {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), Sense::hover());
+                        let icon = Rect::from_center_size(Pos2::new(rect.left() + 10.0, rect.center().y), egui::vec2(16.0, 16.0));
+                        draw_icon(ui.painter(), &mut self.images, &it.path, it.is_dir, &it.ext, icon);
+                        let font = egui::FontId::proportional(14.0);
+                        let galley = ui.painter().layout_no_wrap(it.name.clone(), font, ui.visuals().text_color());
+                        ui.painter().with_clip_rect(rect).galley(Pos2::new(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0), galley, ui.visuals().text_color());
+                    }
+                    if *total > items.len() {
+                        ui.label(RichText::new(crate::i18n::tf("… ve {} öğe daha", &[&(total - items.len())])).weak());
+                    }
+                }
+            }
         });
     }
 
@@ -3878,12 +4362,16 @@ impl App {
                 ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.text));
             };
             let t = &self.tabs[self.active];
-            let count = if t.is_pc() { self.drives.lock().unwrap().len() } else if t.is_home() { 0 } else { t.view.len() };
-            if !t.is_home() || t.is_pc() {
+            if self.git_branch.0 != t.path {
+                let branch = if t.lists_files() && t.search.is_none() { fsutil::git_branch(&t.path) } else { None };
+                self.git_branch = (t.path.clone(), branch);
+            }
+            let count = if t.lists_files() { t.view.len() } else if t.is_pc() { self.drives.lock().unwrap().len() } else { 0 };
+            if t.lists_files() || t.is_pc() {
                 ui.label(crate::i18n::tf("{} öğe", &[&fmt_count(count)]));
                 bar(ui);
             }
-            if !t.is_home() {
+            if t.lists_files() {
                 let sel = t.view.iter().filter(|i| t.selection.contains(i)).count();
                 if !t.filter.is_empty() && t.search.is_none() {
                     ui.label(RichText::new(crate::i18n::tf("(filtre: {} / {})", &[&t.view.len(), &t.entries.len()])).color(p.weak));
@@ -3925,6 +4413,10 @@ impl App {
                 }
                 if toggle(ui, g::LIST, !grid).on_hover_text(crate::i18n::t("Ayrıntılar (Ctrl+Shift+6)")).clicked() {
                     actions.push(Action::SetView(0));
+                }
+                if let Some(b) = &self.git_branch.1 {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(format!("git: {b}")).color(p.weak)).on_hover_text(crate::i18n::t("Bu klasörün bulunduğu git deposunun etkin dalı"));
                 }
             });
         });
@@ -4014,7 +4506,304 @@ impl App {
         }
     }
 
-    fn dialogs(&mut self, ctx: &egui::Context) {
+    /// Komut paletinin satırları: ad, kısayol, iş. Yalnız şu an yapılabilecekler listelenir.
+    fn palette_items(&self) -> Vec<(String, String, Cmd)> {
+        let t = &self.tabs[self.active];
+        let (home, files, in_search, cur) = (t.is_home(), t.lists_files(), t.search.is_some(), t.path.clone());
+        let has_sel = !t.selected_entries().is_empty();
+        let mut out = Vec::new();
+        let mut add = |key: &str, keys: &str, cmd: Cmd| {
+            let (name, sc) = crate::palette::split_shortcut(crate::i18n::t(key));
+            out.push((name.to_string(), if sc.is_empty() { keys } else { sc }.to_string(), cmd));
+        };
+        add("Yeni sekme (Ctrl+T)", "", Cmd::Do(Action::NewTab(PathBuf::new())));
+        add("Sekmeyi kapat (Ctrl+W)", "", Cmd::Do(Action::CloseTab(self.active)));
+        add("Yeni pencere", "Ctrl+N", Cmd::Do(Action::NewWindow));
+        add("Geri (Alt+Sol ok)", "", Cmd::Do(Action::Back));
+        add("İleri (Alt+Sağ ok)", "", Cmd::Do(Action::Forward));
+        add("Üst klasör (Alt+Yukarı ok)", "", Cmd::Do(Action::Up));
+        add("Yenile (F5)", "", Cmd::Do(Action::Refresh));
+        add("Adres çubuğu", "Ctrl+L", Cmd::Address);
+        add("Ara", "Ctrl+F", Cmd::Search);
+        if files && !in_search {
+            add("Yeni klasör", "Ctrl+Shift+N", Cmd::Do(Action::NewFolder));
+            add("Yeni metin belgesi", "", Cmd::Do(Action::NewFile));
+            add("Yapıştır (Ctrl+V)", "", Cmd::Do(Action::Paste));
+        }
+        if has_sel {
+            add("Kes (Ctrl+X)", "", Cmd::Do(Action::Cut));
+            add("Kopyala (Ctrl+C)", "", Cmd::Do(Action::Copy));
+            add("Yeniden adlandır (F2)", "", Cmd::Do(Action::Rename));
+            if t.selected_entries().len() > 1 {
+                add("Toplu yeniden adlandır", "F2", Cmd::Do(Action::Rename));
+            }
+            if !in_search {
+                add("Zip dosyasına sıkıştır", "", Cmd::Do(Action::Compress));
+            }
+            if let [e] = t.selected_entries()[..] {
+                if crate::archive::is_zip(&e.path) {
+                    add("Buraya çıkart", "", Cmd::Do(Action::Extract(e.path.clone())));
+                }
+            }
+            add("Sil                               Del", "", Cmd::Do(Action::Delete { permanent: false }));
+            add("Kalıcı olarak sil", "Shift+Del", Cmd::Do(Action::Delete { permanent: true }));
+        }
+        if files {
+            add("Tümünü seç            Ctrl+A", "", Cmd::Do(Action::SelectAll));
+            add("Hiçbirini seçme        Esc", "", Cmd::Do(Action::SelectNone));
+            add("Seçimi tersine çevir", "", Cmd::Do(Action::InvertSelection));
+        }
+        if !self.undo.is_empty() {
+            add("Geri al                   Ctrl+Z", "", Cmd::Do(Action::Undo));
+        }
+        if !home {
+            let target = t.selected_paths().into_iter().next().unwrap_or(cur.clone());
+            add("Yolu kopyala (Ctrl+Shift+C)", "", Cmd::Do(Action::CopyPath));
+            add("Terminalde aç", "", Cmd::Do(Action::Terminal(cur.clone())));
+            add("Klasör boyutlarını hesapla", "", Cmd::Do(Action::CalcSize));
+            add("Hızlı erişime sabitle   Ctrl+D", "", Cmd::Do(Action::AddBookmark(cur)));
+            add("Özellikler              Alt+Enter", "", Cmd::Do(Action::Properties(target)));
+        }
+        add("Ayrıntılar bölmesi (Alt+P)", "", Cmd::Preview);
+        add("Çift bölme (Ctrl+Shift+S)", "", Cmd::Do(Action::ToggleSplit));
+        if self.split.is_some() && has_sel && files && !in_search {
+            add("Öbür bölmeye kopyala", "", Cmd::Do(Action::ToOtherPane { cut: false }));
+            add("Öbür bölmeye taşı", "", Cmd::Do(Action::ToOtherPane { cut: true }));
+        }
+        add("Gizli öğeler (Ctrl+H)", "", Cmd::Hidden);
+        add("Dosya adı uzantıları", "", Cmd::Extensions);
+        add("Tam ekran", "F11", Cmd::Fullscreen);
+        add("Klavye kısayolları      F1", "", Cmd::Help);
+
+        let sort = crate::i18n::t("Sırala");
+        for (k, n) in [(SortKey::Name, "Ad"), (SortKey::Modified, "Değiştirme tarihi"), (SortKey::Type, "Tür"), (SortKey::Size, "Boyut")] {
+            out.push((format!("{sort}: {}", crate::i18n::t(n)), String::new(), Cmd::Do(Action::Sort(k))));
+        }
+        let view = crate::i18n::t("Görünüm");
+        for (i, (_, n)) in VIEW_LEVELS.iter().enumerate() {
+            let sc = ["Ctrl+Shift+6", "Ctrl+Shift+4", "Ctrl+Shift+3", "Ctrl+Shift+2", "Ctrl+Shift+1"][i];
+            out.push((format!("{view}: {}", crate::i18n::t(n)), sc.to_string(), Cmd::Do(Action::SetView(i))));
+        }
+        let theme = crate::i18n::t("Tema");
+        let names = [crate::i18n::t("Sistem"), crate::i18n::t("Açık"), crate::i18n::t("Koyu")].into_iter().chain(scheme::SCHEMES.iter().map(|c| c.name));
+        for (v, n) in names.enumerate() {
+            out.push((format!("{theme}: {n}"), String::new(), Cmd::Theme(v as u8)));
+        }
+        // Sabitlenen, bilinen, sürücüler ve son gidilen klasörler
+        let go = crate::i18n::t("Klasöre git");
+        let drives: Vec<PathBuf> = self.drives.lock().unwrap().iter().map(|d| d.root.clone()).collect();
+        let places = self.bookmarks.iter().chain(self.known.iter().map(|(_, _, p)| p)).chain(&drives).chain(self.recent.iter().take(20));
+        let mut seen = std::collections::HashSet::new();
+        for p in places {
+            if !crate::tab::is_virtual(p) && seen.insert(p) {
+                out.push((format!("{go}: {}", self.loc_name(p)), short(&p.display().to_string(), 44), Cmd::Do(Action::Navigate(p.clone()))));
+            }
+        }
+        out
+    }
+
+    fn run_cmd(&mut self, cmd: Cmd, actions: &mut Vec<Action>) {
+        match cmd {
+            Cmd::Do(a) => actions.push(a),
+            Cmd::Address => {
+                self.address_edit = Some(self.tabs[self.active].path.to_string_lossy().into_owned());
+                self.address_focus = true;
+            }
+            Cmd::Search => self.focus_search = true,
+            Cmd::Help => self.dialog = Dialog::Help,
+            Cmd::Fullscreen => {
+                let fs = self.ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+            }
+            Cmd::Preview => self.show_preview = !self.show_preview,
+            Cmd::Hidden => {
+                self.show_hidden = !self.show_hidden;
+                self.subdirs.clear();
+                self.mark_views_dirty();
+            }
+            Cmd::Extensions => self.show_ext = !self.show_ext,
+            Cmd::Theme(v) => self.set_theme(v),
+        }
+    }
+
+    fn palette(&mut self, ctx: &egui::Context, query: &mut String, sel: &mut usize, actions: &mut Vec<Action>) -> bool {
+        let mut items = self.palette_items();
+        let mut found: Vec<(i32, usize)> = items.iter().enumerate().filter_map(|(i, (name, _, _))| Some((crate::palette::score(query, name)?, i))).collect();
+        found.sort_by_key(|&(s, i)| (std::cmp::Reverse(s), i));
+
+        // Metin kutusundan önce alınır, yoksa imleci oynatırlar
+        let (up, down, enter, esc) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+            )
+        });
+        let n = found.len();
+        if n > 0 && down {
+            *sel = (*sel + 1) % n;
+        }
+        if n > 0 && up {
+            *sel = (*sel + n - 1) % n;
+        }
+        *sel = (*sel).min(n.saturating_sub(1));
+        let mut run = if enter { found.get(*sel).map(|&(_, i)| i) } else { None };
+
+        let p = pal(ctx.style().visuals.dark_mode);
+        let accent = self.accent;
+        let width = 560.0_f32.min(ctx.screen_rect().width() - 32.0);
+        let area = egui::Area::new(egui::Id::new("palette")).anchor(Align2::CENTER_TOP, egui::vec2(0.0, TITLE_H + 8.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(6).show(ui, |ui| {
+                ui.set_width(width);
+                let edit = ui.add(egui::TextEdit::singleline(query).hint_text(crate::i18n::t("Komut adı yazın")).desired_width(f32::INFINITY).margin(egui::vec2(8.0, 6.0)));
+                edit.request_focus();
+                if edit.changed() {
+                    *sel = 0;
+                }
+                ui.add_space(4.0);
+                if found.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(crate::i18n::t("Eşleşen komut yok")).weak());
+                    ui.add_space(4.0);
+                    return;
+                }
+                egui::ScrollArea::vertical().max_height(28.0 * 12.0).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (row, &(_, i)) in found.iter().enumerate() {
+                        let (name, keys, _) = &items[i];
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::click());
+                        let painter = ui.painter();
+                        if row == *sel {
+                            painter.rect_filled(rect, 4.0, p.sel);
+                            painter.rect_filled(Rect::from_min_size(Pos2::new(rect.left(), rect.center().y - 8.0), egui::vec2(3.0, 16.0)), 1.5, accent);
+                            if up || down {
+                                resp.scroll_to_me(None);
+                            }
+                        } else if resp.hovered() {
+                            painter.rect_filled(rect, 4.0, p.hover);
+                        }
+                        let keys_rect = painter.text(rect.right_center() - egui::vec2(10.0, 0.0), Align2::RIGHT_CENTER, keys, egui::FontId::proportional(12.0), p.weak);
+                        // Ad uzunsa sağdaki kısayolun ya da yolun üstüne taşmasın
+                        let name_clip = rect.with_max_x(if keys.is_empty() { rect.right() } else { keys_rect.left() - 12.0 });
+                        painter.with_clip_rect(name_clip).text(rect.left_center() + egui::vec2(12.0, 0.0), Align2::LEFT_CENTER, name, egui::FontId::proportional(14.0), p.text);
+                        if resp.clicked() {
+                            run = Some(i);
+                        }
+                    }
+                });
+            });
+        });
+        let outside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|pos| !area.response.rect.contains(pos)));
+        if let Some(i) = run {
+            let cmd = items.swap_remove(i).2;
+            self.run_cmd(cmd, actions);
+            return false;
+        }
+        !(esc || outside)
+    }
+
+    fn batch_rename(&mut self, ctx: &egui::Context, items: &[crate::rename::Item], rule: &mut crate::rename::Rule) -> bool {
+        use crate::rename::{Case, Problem};
+        let plan = crate::rename::plan(rule, items);
+        let changed = items.iter().zip(&plan).filter(|(it, (n, _))| path_label(&it.path) != *n).count();
+        let problems = plan.iter().filter(|(_, p)| p.is_some()).count();
+        let mut apply = false;
+        let resp = egui::Modal::new(egui::Id::new("batch_rename")).show(ctx, |ui| {
+            ui.set_width(640.0);
+            ui.heading(crate::i18n::t("Toplu yeniden adlandır"));
+            ui.label(RichText::new(crate::i18n::tf("{} öğe seçildi", &[&items.len()])).weak());
+            ui.add_space(8.0);
+            egui::Grid::new("rename_rule").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                ui.label(crate::i18n::t("Bul"));
+                ui.add(egui::TextEdit::singleline(&mut rule.find).desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label(crate::i18n::t("Şununla değiştir"));
+                ui.add(egui::TextEdit::singleline(&mut rule.replace).desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label(crate::i18n::t("Ad şablonu"));
+                ui.add(egui::TextEdit::singleline(&mut rule.template).hint_text("{name} {n}").desired_width(f32::INFINITY));
+                ui.end_row();
+                ui.label("");
+                ui.label(RichText::new(crate::i18n::t("{name}: eski ad · {n}: numara · {date}: değiştirme tarihi")).weak().small());
+                ui.end_row();
+                ui.label(crate::i18n::t("Numara"));
+                ui.horizontal(|ui| {
+                    ui.label(crate::i18n::t("başlangıç"));
+                    ui.add(egui::DragValue::new(&mut rule.start).range(0..=999_999));
+                    ui.add_space(12.0);
+                    ui.label(crate::i18n::t("basamak"));
+                    ui.add(egui::DragValue::new(&mut rule.digits).range(1..=8));
+                });
+                ui.end_row();
+                ui.label(crate::i18n::t("Harfler"));
+                ui.horizontal_wrapped(|ui| {
+                    for (c, n) in [(Case::Keep, "Olduğu gibi"), (Case::Lower, "küçük harf"), (Case::Upper, "BÜYÜK HARF"), (Case::Title, "Baş Harfler Büyük")] {
+                        ui.radio_value(&mut rule.case, c, crate::i18n::t(n));
+                    }
+                });
+                ui.end_row();
+            });
+            ui.add_space(8.0);
+            let err = if ui.visuals().dark_mode { Color32::from_rgb(255, 153, 164) } else { Color32::from_rgb(196, 43, 28) };
+            egui::Frame::new().fill(ui.visuals().extreme_bg_color).corner_radius(6.0).inner_margin(8).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+                    egui::Grid::new("rename_preview").num_columns(3).spacing([10.0, 4.0]).show(ui, |ui| {
+                        for (it, (n, p)) in items.iter().zip(&plan) {
+                            let old = path_label(&it.path);
+                            ui.label(RichText::new(&old).weak());
+                            ui.label(RichText::new("→").weak());
+                            let why = match p {
+                                Some(Problem::Invalid) => crate::i18n::t("geçersiz ad"),
+                                Some(Problem::Duplicate) => crate::i18n::t("aynı ad iki kez"),
+                                Some(Problem::Exists) => crate::i18n::t("bu adda bir öğe zaten var"),
+                                None => "",
+                            };
+                            if p.is_some() {
+                                ui.label(RichText::new(format!("{n}   ({why})")).color(err));
+                            } else if old == *n {
+                                ui.label(RichText::new(n).weak());
+                            } else {
+                                ui.label(n);
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if problems > 0 {
+                    ui.label(RichText::new(crate::i18n::tf("{} adda sorun var", &[&problems])).color(err));
+                } else {
+                    ui.label(RichText::new(crate::i18n::tf("{} öğenin adı değişecek", &[&changed])).weak());
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let ok = problems == 0 && changed > 0;
+                    let b = ui.add_enabled(ok, egui::Button::new(RichText::new(crate::i18n::t("Yeniden adlandır")).color(Color32::WHITE)).fill(self.accent).min_size(egui::vec2(140.0, 30.0)));
+                    apply = b.clicked();
+                    ui.button(crate::i18n::t("Vazgeç")).clicked()
+                })
+                .inner
+            })
+            .inner
+        });
+        if apply {
+            let pairs: Vec<(PathBuf, PathBuf)> = items.iter().zip(plan).map(|(it, (n, _))| (it.path.clone(), it.path.with_file_name(n))).filter(|(a, b)| a != b).collect();
+            match crate::rename::apply(&pairs) {
+                Ok(()) => {
+                    self.toast(crate::i18n::tf("{} öğe yeniden adlandırıldı", &[&pairs.len()]), false);
+                    self.undo.push(UndoOp::Renamed(pairs));
+                    self.reload_active(None);
+                }
+                Err(e) => self.toast(crate::i18n::tf("Yeniden adlandırılamadı: {}", &[&e]), true),
+            }
+            return false;
+        }
+        !(resp.inner || resp.should_close())
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let mut dialog = std::mem::replace(&mut self.dialog, Dialog::None);
         let mut keep = true;
         match &mut dialog {
@@ -4114,6 +4903,33 @@ impl App {
                     self.toast(e, true);
                 }
             }
+            Dialog::Palette { query, sel } => keep = self.palette(ctx, query, sel, actions),
+            Dialog::ShellItems(items) => {
+                let resp = egui::Modal::new(egui::Id::new("shell_items")).show(ctx, |ui| {
+                    ui.set_width(440.0);
+                    ui.heading(crate::i18n::t("Sağ tık menüsündeki uygulamalar"));
+                    ui.label(RichText::new(crate::i18n::t("İşaretli olanlar menüde görünür. Windows'un tam menüsü Shift + sağ tıkta her zaman açılır.")).weak());
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                        for (key, text) in items.iter() {
+                            let mut on = !self.hidden_shell.contains(key);
+                            if ui.checkbox(&mut on, text.as_str()).changed() {
+                                if on {
+                                    self.hidden_shell.retain(|k| k != key);
+                                } else {
+                                    self.hidden_shell.push(key.clone());
+                                }
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.button(crate::i18n::t("Kapat")).clicked()).inner
+                });
+                if resp.inner || resp.should_close() {
+                    keep = false;
+                }
+            }
+            Dialog::BatchRename { items, rule } => keep = self.batch_rename(ctx, items, rule),
             Dialog::Help => {
                 let resp = egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
                     ui.set_width(560.0);
@@ -4169,6 +4985,7 @@ const HELP: &[(&str, &str)] = &[
     ("Ctrl+C / Ctrl+X / Ctrl+V", "Kopyala / Kes / Yapıştır (Explorer ile karşılıklı)"),
     ("Ctrl+Z", "Geri al: yeniden adlandırma, taşıma, kopyalama, silme"),
     ("F2", "Yeniden adlandır (yerinde)"),
+    ("F2 (birden çok öğe seçiliyken)", "Toplu yeniden adlandır: bul ve değiştir, numara, tarih ★"),
     ("Del / Shift+Del", "Geri dönüşüm kutusuna / kalıcı sil"),
     ("Ctrl+Shift+N", "Yeni klasör"),
     ("Ctrl+A", "Tümünü seç"),
@@ -4181,6 +4998,9 @@ const HELP: &[(&str, &str)] = &[
     ("Ctrl+T / Ctrl+W", "Yeni sekme / sekmeyi kapat"),
     ("Ctrl+Tab / Ctrl+1…9", "Sekmeler arası geçiş"),
     ("Ctrl+N", "Yeni pencere"),
+    ("Ctrl+Shift+P", "Komut paleti: bütün komutları adıyla ara ★"),
+    ("Ctrl+Shift+S", "Çift bölme: iki klasör yan yana ★"),
+    ("F6", "Çift bölmede öbür bölmeye geç ★"),
     ("Shift+sağ tık / Shift+F10", "Windows'un tam sağ tık menüsü"),
     ("Orta tık", "Klasörü yeni sekmede aç / sekmeyi kapat ★"),
     ("Sürükle-bırak", "Aynı sürücü: taşı, farklı sürücü: kopyala (Ctrl: kopyala, Shift: taşı)"),
@@ -4222,6 +5042,9 @@ fn resize_edges(ctx: &egui::Context) {
     }
 }
 
+/// eframe'in pencere konumunu sakladığı anahtar
+const WINDOW_KEY: &str = "window";
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(feature = "screenshot")]
@@ -4252,7 +5075,9 @@ impl eframe::App for App {
         self.poll_update();
         if self.update_installed && ctx.input(|i| i.viewport().close_requested()) {
             // Gizlenmek yerine çık; yeni sürüm arka planda bekleyecek
-            if self.resident && self.background {
+            if self.restart_on_close {
+                crate::update::restart();
+            } else if self.resident && self.background {
                 crate::update::launch_hidden();
             }
         } else if self.resident && self.background && ctx.input(|i| i.viewport().close_requested()) {
@@ -4263,8 +5088,12 @@ impl eframe::App for App {
         }
 
         let mut actions = Vec::new();
+        self.shell_wanted = false;
         self.images.poll(ctx);
         self.reveal_when_ready(ctx);
+        if self.revealed {
+            crate::update::confirm_started();
+        }
 
         self.tabs[self.active].ensure_loaded(ctx);
         self.poll_subdirs();
@@ -4318,6 +5147,7 @@ impl eframe::App for App {
                     JobKind::Transfer if j.cut => self.undo.push(UndoOp::Moved(pairs)),
                     JobKind::Transfer => self.undo.push(UndoOp::Copied(pairs.into_iter().map(|(_, d)| d).collect())),
                     JobKind::Delete if !j.permanent => self.undo.push(UndoOp::Trashed(pairs.into_iter().map(|(s, _)| s).collect())),
+                    JobKind::Archive => self.undo.extend(pairs.into_iter().map(|(_, d)| UndoOp::Created(d))),
                     _ => {}
                 }
             }
@@ -4390,17 +5220,15 @@ impl eframe::App for App {
             });
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(pl.content).inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 0 })).show(ctx, |ui| {
-            let t = &self.tabs[self.active];
-            if t.is_pc() {
-                self.pc_page(ui, &mut actions);
-            } else if t.is_home() {
-                self.home_page(ui, &mut actions);
-            } else {
-                self.file_area(ui, &mut actions);
+            // Sekme şeridinde az önce seçilen sekme odaktaki bölmeye geçsin
+            self.sync_split();
+            match self.split {
+                Some(panes) => self.split_panes(ui, panes, &mut actions),
+                None => self.pane(ui, &mut actions),
             }
         });
 
-        self.dialogs(ctx);
+        self.dialogs(ctx, &mut actions);
         self.overlays(ctx);
         self.drag_overlay(ctx);
 
@@ -4422,6 +5250,15 @@ impl eframe::App for App {
         for a in actions {
             self.apply(a);
         }
+        if self.shell_wanted {
+            let paths = self.tabs[self.active].selected_paths();
+            if self.shell_menu.as_ref().is_none_or(|(p, _)| *p != paths) {
+                let menu = shell::ShellMenu::query(&paths, ctx);
+                self.shell_menu = Some((paths, menu));
+            }
+        } else {
+            self.shell_menu = None;
+        }
 
         let t = &self.tabs[self.active];
         let title = format!("{} — Swift Explorer", if t.is_home() { self.loc_name(&t.path) } else { t.path.display().to_string() });
@@ -4438,6 +5275,22 @@ impl eframe::App for App {
         if let Some(pos) = self.inject_release.take() {
             raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: raw.modifiers });
             raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: raw.modifiers });
+        }
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // eframe pencere konumunu bundan hemen önce yazar. Simge durumundaki pencerede
+        // boyut 0, konum -32000 gelir; bu kalırsa sonraki açılış köşede minicik başlar.
+        let broken = self.ctx.input(|i| {
+            let v = i.viewport();
+            v.minimized == Some(true) || v.inner_rect.is_some_and(|r| r.width() < 640.0 || r.height() < 400.0)
+        });
+        if broken {
+            if let Some(w) = &self.window_state {
+                storage.set_string(WINDOW_KEY, w.clone());
+            }
+        } else {
+            self.window_state = storage.get_string(WINDOW_KEY);
         }
     }
 

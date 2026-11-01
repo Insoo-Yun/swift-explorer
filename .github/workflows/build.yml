@@ -49,6 +49,26 @@ jobs:
         with:
           files: ${{ matrix.asset }}*
 
+  # Uygulama yeni sürümü API yerine bu dosyadan öğrenir: istek sınırı yok
+  manifest:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SwiftExplorer.exe
+      - name: Write latest.json
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases"
+          sha=$(sha256sum SwiftExplorer.exe | cut -d' ' -f1)
+          jq -n --arg v "$version" --arg page "$base/tag/$GITHUB_REF_NAME"             --arg url "$base/download/$GITHUB_REF_NAME/SwiftExplorer.exe" --arg sha "$sha"             '{version: $v, page: $page, windows: {url: $url, sha256: $sha}}' > latest.json
+          cat latest.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: latest.json
+
   flatpak-sources:
     runs-on: ubuntu-latest
     steps:

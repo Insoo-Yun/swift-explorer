@@ -157,6 +157,30 @@ pub fn context_menu(_hwnd: isize, _paths: &[PathBuf], _extended: bool) -> MenuRe
     MenuResult::None
 }
 
+/// Windows menü öğelerinin Linux karşılığı yok; menü hep boş
+#[allow(dead_code)]
+pub struct ShellEntry {
+    pub key: String,
+    pub text: String,
+    pub id: u32,
+    pub icon: Option<egui::TextureHandle>,
+    pub children: Vec<ShellEntry>,
+}
+
+pub struct ShellMenu {
+    pub items: Vec<ShellEntry>,
+}
+
+impl ShellMenu {
+    pub fn query(_paths: &[PathBuf], _ctx: &egui::Context) -> Option<ShellMenu> {
+        None
+    }
+
+    pub fn invoke(&self, _hwnd: isize, _id: u32) -> MenuResult {
+        MenuResult::None
+    }
+}
+
 pub fn drag_out(_paths: &[PathBuf]) -> bool {
     false
 }

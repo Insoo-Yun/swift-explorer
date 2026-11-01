@@ -32,6 +32,12 @@ pub struct Search {
     pub done: bool,
     pub started: Instant,
     pub elapsed: Duration,
+    /// Yalnız bu uzantıdaki sonuçlar gösterilir
+    pub ext: Option<String>,
+    /// Sonuçlardaki uzantılar; sonuçlar gelirken en fazla yarım saniyede bir sayılır
+    pub ext_counts: Vec<(String, usize)>,
+    counted: usize,
+    counted_at: Instant,
 }
 
 pub struct Tab {
@@ -179,6 +185,11 @@ impl Tab {
         self.path.as_os_str() == THIS_PC
     }
 
+    /// Dosya listesi gösteriliyor: gerçek klasör ya da arama sonuçları
+    pub fn lists_files(&self) -> bool {
+        !self.is_home() || self.search.is_some()
+    }
+
     pub fn is_loading(&self) -> bool {
         self.loader.is_some()
     }
@@ -233,8 +244,7 @@ impl Tab {
 
     pub fn go_up(&mut self, ctx: &egui::Context) {
         if self.search.is_some() {
-            self.cancel_search();
-            self.load(true, ctx);
+            self.exit_search(ctx);
             return;
         }
         if self.is_home() {
@@ -289,7 +299,8 @@ impl Tab {
         }
     }
 
-    pub fn start_search(&mut self, ctx: &egui::Context) {
+    /// `roots`: aranacak klasörler. Bu bilgisayar'da bunlar sürücü kökleridir.
+    pub fn start_search(&mut self, roots: Vec<PathBuf>, ctx: &egui::Context) {
         let pattern = Pattern::new(&self.filter);
         if pattern.is_empty() {
             return;
@@ -303,10 +314,14 @@ impl Tab {
         self.view_dirty = true;
         self.search = Some(Search {
             query: self.filter.trim().to_string(),
-            handle: fsutil::spawn_search(self.path.clone(), pattern, ctx.clone()),
+            handle: fsutil::spawn_search(roots, pattern, ctx.clone()),
             done: false,
             started: Instant::now(),
             elapsed: Duration::ZERO,
+            ext: None,
+            ext_counts: Vec::new(),
+            counted: 0,
+            counted_at: Instant::now(),
         });
         // Sonuçlar zaten eşleşiyor; liste filtresini temizle
         self.filter.clear();
@@ -321,7 +336,15 @@ impl Tab {
     pub fn exit_search(&mut self, ctx: &egui::Context) {
         if self.search.is_some() {
             self.cancel_search();
-            self.load(true, ctx);
+            if self.is_home() {
+                // Bu bilgisayar'da yüklenecek klasör yok, sonuçları elle temizle
+                self.entries.clear();
+                self.selection.clear();
+                self.cursor = None;
+                self.view_dirty = true;
+            } else {
+                self.load(true, ctx);
+            }
         }
     }
 
@@ -447,13 +470,25 @@ impl Tab {
         }
     }
 
+    /// Arama sonuçlarındaki uzantıları gerekirse yeniden sayar
+    pub fn count_search_extensions(&mut self) {
+        let Some(s) = &mut self.search else { return };
+        let n = self.entries.len();
+        if s.counted != n && (s.done || s.counted_at.elapsed() > Duration::from_millis(500)) {
+            s.ext_counts = fsutil::top_extensions(&self.entries, 8);
+            s.counted = n;
+            s.counted_at = Instant::now();
+        }
+    }
+
     pub fn rebuild_view(&mut self, key: SortKey, asc: bool, show_hidden: bool, group_by_date: bool) {
         let pat = Pattern::new(&self.filter);
+        let ext = self.search.as_ref().and_then(|s| s.ext.as_deref());
         let entries = &self.entries;
         self.view = (0..entries.len())
             .filter(|&i| {
                 let e = &entries[i];
-                (show_hidden || !e.hidden) && (pat.is_empty() || pat.matches(&e.name_lower))
+                (show_hidden || !e.hidden) && (pat.is_empty() || pat.matches(&e.name_lower)) && ext.is_none_or(|x| !e.is_dir && e.ext == x)
             })
             .collect();
         let cmp = |&a: &usize, &b: &usize| fsutil::compare(&entries[a], &entries[b], key, asc);

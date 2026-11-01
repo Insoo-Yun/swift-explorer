@@ -8,12 +8,14 @@ use std::time::Duration;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const LATEST: &str = "https://api.github.com/repos/misutesu-desu/swift-explorer/releases/latest";
-const ASSET: &str = "SwiftExplorer.exe";
+/// Her sürümle yayınlanan bilgi dosyası. API'ye gitmediği için istek sınırına takılmaz.
+const LATEST: &str = "https://github.com/misutesu-desu/swift-explorer/releases/latest/download/latest.json";
 
 /// Güncellemeyi kuran gizli süreç bu bayrakla yeni sürümü başlatır; yeni süreç
 /// eskisinin çıkmasını bekleyip arka planda bekler.
 pub const AFTER_UPDATE_ARG: &str = "--after-update";
+/// Kullanıcı "yeniden başlat" dedi: yeni süreç eskisinin çıkmasını bekleyip pencereyi açar
+pub const RESTART_ARG: &str = "--restart";
 
 pub enum Found {
     /// Yeni exe yerine kondu
@@ -23,17 +25,16 @@ pub enum Found {
 }
 
 #[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    html_url: String,
-    assets: Vec<Asset>,
+struct Manifest {
+    version: String,
+    page: String,
+    windows: Option<Binary>,
 }
 
 #[derive(Deserialize)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
-    digest: Option<String>,
+struct Binary {
+    url: String,
+    sha256: String,
 }
 
 /// "v0.5.1" > "0.5.0"; sayı olmayan etiketler yeni sayılmaz
@@ -50,9 +51,31 @@ fn is_dev_build(exe: &Path) -> bool {
     cfg!(debug_assertions) || exe.ancestors().any(|a| a.file_name().is_some_and(|n| n == "target"))
 }
 
+/// Geliştirme derlemesi kayıt defterindeki kurulu kopyanın kaydını da devralmasın
+pub fn dev_build() -> bool {
+    std::env::current_exe().is_ok_and(|e| is_dev_build(&e))
+}
+
 /// Scoop kurduğu klasöre bu iki dosyayı koyar; sürümü kendisi takip eder
 fn scoop_install(exe: &Path) -> bool {
     exe.parent().is_some_and(|d| d.join("install.json").exists() && d.join("manifest.json").exists())
+}
+
+/// Kayıt defterine yazılacak exe yolu. Scoop her sürümü ayrı klasöre kurar ve eskisini siler;
+/// `current` bağlantısı hep son sürümü gösterir. Kayıt onu göstersin ki Scoop güncelledikten sonra da çalışsın.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn stable_exe() -> std::io::Result<PathBuf> {
+    std::env::current_exe().map(stable_path)
+}
+
+fn stable_path(exe: PathBuf) -> PathBuf {
+    if scoop_install(&exe) {
+        let current = exe.parent().filter(|d| d.file_name().is_some_and(|n| n != "current")).and_then(|d| Some(d.parent()?.join("current").join(exe.file_name()?)));
+        if let Some(c) = current.filter(|c| c.exists()) {
+            return c;
+        }
+    }
+    exe
 }
 
 /// Flatpak ve Scoop kendi güncellemesini yapar
@@ -72,31 +95,31 @@ pub fn check() -> Result<Option<Found>, String> {
     agent()
         .get(LATEST)
         .set("User-Agent", &ua)
-        .set("Accept", "application/vnd.github+json")
         .call()
         .map_err(|e| e.to_string())?
         .into_reader()
-        .take(4 << 20)
+        .take(64 << 10)
         .read_to_end(&mut body)
         .map_err(|e| e.to_string())?;
-    let rel: Release = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
-    if !newer(&rel.tag_name, env!("CARGO_PKG_VERSION")) {
+    let m: Manifest = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    if !newer(&m.version, env!("CARGO_PKG_VERSION")) {
         return Ok(None);
     }
-    let version = rel.tag_name.trim_start_matches('v').to_string();
-    let available = Ok(Some(Found::Available(version.clone(), rel.html_url.clone())));
+    let available = Ok(Some(Found::Available(m.version.clone(), m.page.clone())));
     if !cfg!(windows) {
         return available;
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let asset = rel.assets.iter().find(|a| a.name == ASSET);
-    let sha = asset.and_then(|a| a.digest.as_deref()?.strip_prefix("sha256:"));
-    let (Some(asset), Some(sha)) = (asset, sha) else { return available };
+    let Some(bin) = &m.windows else { return available };
     if is_dev_build(&exe) {
         return available;
     }
-    match install(&exe, &asset.browser_download_url, sha, &ua) {
-        Ok(()) => Ok(Some(Found::Installed(version))),
+    // Bu sürüm açılışta çöktüğü için geri alındı; kullanıcı isterse kendisi indirir
+    if std::fs::read_to_string(with_ext(&exe, ".skip")).is_ok_and(|v| v.trim() == m.version) {
+        return available;
+    }
+    match install(&exe, &bin.url, &bin.sha256, &ua) {
+        Ok(()) => Ok(Some(Found::Installed(m.version))),
         // Program Files gibi yazılamayan bir klasör: kullanıcı kendisi indirir
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => available,
         Err(e) => Err(e.to_string()),
@@ -112,8 +135,64 @@ fn with_ext(exe: &Path, ext: &str) -> PathBuf {
 /// Önceki güncellemeden kalan eski exe; onu çalıştıran süreç kapandıysa silinebilir
 pub fn remove_old() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(with_ext(&exe, ".old"));
+        // İndirme sırasında süreç kapandıysa yarım dosya kalır; denetleyici tek süreçte çalıştığından başka indirme yok
+        let _ = std::fs::remove_file(with_ext(&exe, ".new"));
+        // Yeni sürüm açıldığını doğrulamadıysa eski exe geri dönüş için kalsın
+        if !with_ext(&exe, ".pending").exists() {
+            let _ = std::fs::remove_file(with_ext(&exe, ".old"));
+            let _ = std::fs::remove_file(with_ext(&exe, ".bad"));
+        }
     }
+}
+
+/// Kurulan sürüm bu kadar başlangıçta ilk karesini çizemezse eskisine dönülür
+const MAX_FAILED_STARTS: u32 = 2;
+
+/// Yeni sürüm her başlangıçta `.pending` sayacını artırır, `confirm_started` onu siler.
+/// Sayaç sınırdaysa yeni sürüm açılışta çöküyordur: eski exe geri konur ve başlatılır.
+pub fn startup_guard() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    if roll_back_if_failing(&exe, env!("CARGO_PKG_VERSION")) {
+        let _ = std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn();
+        std::process::exit(0);
+    }
+}
+
+fn roll_back_if_failing(exe: &Path, version: &str) -> bool {
+    let pending = with_ext(exe, ".pending");
+    let Ok(text) = std::fs::read_to_string(&pending) else { return false };
+    let starts: u32 = text.trim().parse().unwrap_or(0);
+    let old = with_ext(exe, ".old");
+    if !old.exists() {
+        let _ = std::fs::remove_file(&pending);
+        return false;
+    }
+    if starts >= MAX_FAILED_STARTS {
+        let bad = with_ext(exe, ".bad");
+        let _ = std::fs::remove_file(&bad);
+        if std::fs::rename(exe, &bad).is_ok() {
+            if std::fs::rename(&old, exe).is_ok() {
+                let _ = std::fs::write(with_ext(exe, ".skip"), version);
+                let _ = std::fs::remove_file(&pending);
+                return true;
+            }
+            let _ = std::fs::rename(&bad, exe);
+        }
+    }
+    let _ = std::fs::write(&pending, (starts + 1).to_string());
+    false
+}
+
+/// Yeni sürüm ilk karesini çizdi, geri dönüş gerekmez
+pub fn confirm_started() {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        if let Ok(exe) = std::env::current_exe() {
+            if std::fs::remove_file(with_ext(&exe, ".pending")).is_ok() {
+                remove_old();
+            }
+        }
+    });
 }
 
 fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
@@ -146,6 +225,7 @@ fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
             let _ = std::fs::rename(&old, exe);
             return Err(e);
         }
+        std::fs::write(with_ext(exe, ".pending"), "0")?;
         Ok(())
     })();
     if res.is_err() {
@@ -161,9 +241,16 @@ pub fn launch_hidden() {
     }
 }
 
+/// Kurulan sürümü pencereyle başlatır; yeni süreç eskisinin kapanmasını bekler, son sekmeleri açar
+pub fn restart() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).arg(RESTART_ARG).spawn();
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{install, newer, with_ext};
+    use super::{install, newer, roll_back_if_failing, stable_path, with_ext};
 
     /// Ağ gerektirir: cargo test -- --ignored
     #[test]
@@ -183,6 +270,45 @@ mod tests {
         install(&exe, url, sha, "test").unwrap();
         assert_eq!(std::fs::read(with_ext(&exe, ".old")).unwrap(), b"old");
         assert_eq!(std::fs::metadata(&exe).unwrap().len(), 7398912);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rolls_back_after_two_failed_starts() {
+        let dir = std::env::temp_dir().join(format!("swift-rollback-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("SwiftExplorer.exe");
+        std::fs::write(&exe, b"new").unwrap();
+        std::fs::write(with_ext(&exe, ".old"), b"old").unwrap();
+        std::fs::write(with_ext(&exe, ".pending"), "0").unwrap();
+
+        assert!(!roll_back_if_failing(&exe, "0.7.0"));
+        assert!(!roll_back_if_failing(&exe, "0.7.0"));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new");
+        assert!(roll_back_if_failing(&exe, "0.7.0"));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"old");
+        assert_eq!(std::fs::read(with_ext(&exe, ".bad")).unwrap(), b"new");
+        assert_eq!(std::fs::read_to_string(with_ext(&exe, ".skip")).unwrap(), "0.7.0");
+        assert!(!with_ext(&exe, ".pending").exists());
+        assert!(!roll_back_if_failing(&exe, "0.6.0"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scoop_registers_the_current_link() {
+        let dir = std::env::temp_dir().join(format!("swift-scoop-test-{}", std::process::id()));
+        let version = dir.join("0.7.0");
+        let current = dir.join("current");
+        for d in [&version, &current] {
+            std::fs::create_dir_all(d).unwrap();
+            for f in ["SwiftExplorer.exe", "install.json", "manifest.json"] {
+                std::fs::write(d.join(f), b"").unwrap();
+            }
+        }
+        assert_eq!(stable_path(version.join("SwiftExplorer.exe")), current.join("SwiftExplorer.exe"));
+        assert_eq!(stable_path(current.join("SwiftExplorer.exe")), current.join("SwiftExplorer.exe"));
+        std::fs::remove_file(version.join("install.json")).unwrap();
+        assert_eq!(stable_path(version.join("SwiftExplorer.exe")), version.join("SwiftExplorer.exe"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

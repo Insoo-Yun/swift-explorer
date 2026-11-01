@@ -36,15 +36,23 @@ curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/i
 - Explorer'la aynı düzen: başlık çubuğunda sekmeler, kırıntılı adres çubuğu, komut çubuğu, gezinti bölmesi, Giriş ve Bu bilgisayar sayfaları.
 - Windows'un kendi ikonları, küçük resimleri ve tür adları kullanılır.
 - Explorer'daki kısayolların hepsi aynı çalışır. F1 tam listeyi gösterir.
+- Ctrl+Shift+P komut paletini açar: `gizli` ya da `büyük simge` gibi komut adının bir kısmını yazıp Enter'a basın.
+- Ctrl+Shift+S iki klasörü yan yana gösterir. F6 ikisi arasında geçer, aralarında sürükleyince dosyalar kopyalanır ya da taşınır.
+- Birden çok öğe seçiliyken F2 toplu yeniden adlandırmayı açar: bul ve değiştir, `{name}`, `{n}` ve `{date}` içeren ad şablonu, büyük ya da küçük harf. Her yeni ad uygulanmadan önce listede görünür.
+- Zip dosyaları sağ tık menüsünden açılıp oluşturulabilir.
+- Arama sonuçları, listenin üstündeki düğmelerle tek bir uzantıya daraltılabilir.
+- Ayrıntılar bölmesi seçili klasörün içindekileri listeler. Klasör bir git deposundaysa durum çubuğunda dal adı görünür.
 - Arama kutusuna yazdıkça bulunduğunuz klasör filtrelenir. Enter'a basınca tüm alt klasörlerde arar; `*` ve `?` joker karakterleri çalışır.
 - Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır, `terminal` ise Windows Terminal'i açar. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
 - Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
 - Shift + sağ tık Windows'un tam sağ tık menüsünü açar; 7-Zip, WinRAR ve Gönder orada.
+- Sağ tık menüsü Windows menüsündeki uygulamaları da listeler: 7-Zip, WinRAR, Notepad++, Gönder gibi. En alttaki "Bu listeyi düzenle" hangilerinin görüneceğini seçer.
 - Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.
 - Görünüm > Tema altında Sistem, Açık ve Koyu'nun yanında Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine ve Solarized var.
 - Kopyalama ve taşıma, dosyalar diske yazılmadan bitmiş sayılmaz. Terminalde `sync` çalıştırmak gibi. İlerleme çubuğu kaybolunca USB bellek çıkarılabilir. Başka sürücüye taşırken asıl dosyalar ancak bundan sonra silinir.
 - Windows'ta pencere kapatılınca uygulama arka planda bekler. Yeniden açınca pencere, grafik sürücüsünün açılmasını beklemeden hemen gelir. Görünüm > Oturum açılınca arka planda başlat seçilirse bilgisayar açıldıktan sonraki ilk açılış da hızlı olur.
-- Windows'ta uygulama kendini günceller: yeni sürüm GitHub'dan indirilir, SHA-256 özetiyle doğrulanır ve pencere kapatılınca devreye girer. Scoop ile kurulduysa güncellemeyi `scoop update` yapar. Görünüm > Güncellemeleri otomatik yükle ile kapatılabilir.
+- Windows'ta uygulama kendini günceller: yeni sürüm GitHub'dan indirilir, SHA-256 özetiyle doğrulanır ve pencere kapatılınca devreye girer. Beklemek istemezseniz Görünüm > Yeni sürüme geçmek için yeniden başlat. Yeni sürüm iki kez açılamazsa önceki sürüme dönülür. Saatlik denetimi beklemeden bakmak için Görünüm > Güncellemeleri şimdi denetle. Scoop ile kurulduysa güncellemeyi `scoop update` yapar. Görünüm > Güncellemeleri otomatik yükle ile kapatılabilir.
+- Görünüm > Varsayılan dosya gezgini olarak kullan seçilince klasörler, sürücüler ve Win+E Swift Explorer'da açılır. Linux'ta `inode/directory` türü bu uygulamaya verilir, kapatınca önceki uygulamaya döner. Ayar güncellemelerden sonra da geçerli kalır. Exe taşınırsa bir sonraki açılışta Windows yeni yere yönlendirilir. Uygulamayı silmeden önce bu seçeneği kapatın ya da `SwiftExplorer.exe --unregister` çalıştırın.
 - Hedefte aynı adlı dosya varsa değiştirmek, atlamak ya da ikisini de saklamak arasında seçim sorar.
 - Diskteki değişiklikler açık klasörde anında görünür.
 - İndirilenler, Explorer'daki gibi değiştirme tarihine göre gruplanır (Bugün, Dün, Geçen hafta…). Diğer klasörler Sırala > Grupla'dan gruplanabilir.
